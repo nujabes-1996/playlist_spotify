@@ -1,0 +1,10 @@
+[project]
+name = "playlist-spotify-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.136",
+    "sqlmodel>=0.0.21",
+    "apscheduler>=3.10",
+    "spotipy>=2.24",
+]
