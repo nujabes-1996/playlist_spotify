@@ -10,3 +10,8 @@ export interface ConfigWrite {
   playlist_size?: number
   cron_expr?: string | null
 }
+
+export interface AuthStatus {
+  authenticated: boolean
+  spotify_user_id?: string | null
+}

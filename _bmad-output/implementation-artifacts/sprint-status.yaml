@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-06
-last_updated: 2026-05-19  # 2-1 → review
+last_updated: 2026-05-19  # 2-2 → review
 project: playlist_spotify
 
 project_key: NOKEY
@@ -54,7 +54,7 @@ development_status:
   # Epic 2: Spotify Authentication & App Configuration
   epic-2: in-progress
   2-1-config-api-first-run-detection: review
-  2-2-spotify-oauth2-connect-flow: backlog
+  2-2-spotify-oauth2-connect-flow: review
   2-3-token-re-authentication-flow: backlog
   2-4-playlist-size-schedule-configuration-ui: backlog
   epic-2-retrospective: optional

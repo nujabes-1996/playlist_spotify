@@ -6,6 +6,7 @@ from sqlmodel import SQLModel
 
 import models  # noqa: F401 — side-effect import registers all table metadata
 from database import engine
+from routers.auth import router as auth_router
 from routers.config import router as config_router
 from scheduler import scheduler
 
@@ -29,6 +30,7 @@ app.add_middleware(
 )
 
 app.include_router(config_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 
 
 @app.get("/health")
