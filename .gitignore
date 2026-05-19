@@ -40,3 +40,4 @@ Thumbs.db
 
 # Claude Code (local session data & personal settings)
 .claude/
+.mcp.json
