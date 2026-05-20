@@ -18,6 +18,7 @@ class ConnectResponse(BaseModel):
 
 class AuthStatusResponse(BaseModel):
     authenticated: bool
+    has_previous_auth: bool = False
     spotify_user_id: Optional[str] = None
 
 

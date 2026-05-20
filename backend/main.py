@@ -2,19 +2,25 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, Session, select
 
 import models  # noqa: F401 — side-effect import registers all table metadata
 from database import engine
+from models.config import Config
 from routers.auth import router as auth_router
 from routers.config import router as config_router
-from scheduler import scheduler
+from routers.playlists import router as playlists_router
+from routers.sync import router as sync_router
+from scheduler import scheduler, bootstrap_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     scheduler.start()
+    with Session(engine) as session:
+        config = session.exec(select(Config)).first()
+        bootstrap_scheduler(config.cron_expr if config else None)
     yield
     scheduler.shutdown(wait=False)
 
@@ -31,6 +37,8 @@ app.add_middleware(
 
 app.include_router(config_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(playlists_router, prefix="/api/v1")
+app.include_router(sync_router, prefix="/api/v1")
 
 
 @app.get("/health")

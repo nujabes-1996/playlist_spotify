@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-06
-last_updated: 2026-05-19  # 2-2 → review
+last_updated: 2026-05-20  # 5-2 + 5-3 → review
 project: playlist_spotify
 
 project_key: NOKEY
@@ -55,28 +55,28 @@ development_status:
   epic-2: in-progress
   2-1-config-api-first-run-detection: review
   2-2-spotify-oauth2-connect-flow: review
-  2-3-token-re-authentication-flow: backlog
-  2-4-playlist-size-schedule-configuration-ui: backlog
+  2-3-token-re-authentication-flow: review
+  2-4-playlist-size-schedule-configuration-ui: review
   epic-2-retrospective: optional
 
   # Epic 3: Playlist Management & Manual Sync
-  epic-3: backlog
-  3-1-playlist-list-toggle-ui: backlog
-  3-2-playlist-preferences-persistence-library-refresh: backlog
-  3-3-track-harvest-deduplication-engine: backlog
-  3-4-dynamic-playlist-push-sync-logging: backlog
-  3-5-manual-sync-trigger: backlog
+  epic-3: in-progress
+  3-1-playlist-list-toggle-ui: review
+  3-2-playlist-preferences-persistence-library-refresh: review
+  3-3-track-harvest-deduplication-engine: review
+  3-4-dynamic-playlist-push-sync-logging: review
+  3-5-manual-sync-trigger: review
   epic-3-retrospective: optional
 
   # Epic 4: Scheduler & Automatic Sync
-  epic-4: backlog
-  4-1-scheduler-bootstrap-job-persistence: backlog
-  4-2-dynamic-schedule-reconfiguration: backlog
+  epic-4: in-progress
+  4-1-scheduler-bootstrap-job-persistence: review
+  4-2-dynamic-schedule-reconfiguration: review
   epic-4-retrospective: optional
 
   # Epic 5: Real-Time Observability
-  epic-5: backlog
-  5-1-sync-history-log-viewer: backlog
-  5-2-sync-failure-indicator: backlog
-  5-3-real-time-sse-sync-streaming: backlog
+  epic-5: in-progress
+  5-1-sync-history-log-viewer: review
+  5-2-sync-failure-indicator: review
+  5-3-real-time-sse-sync-streaming: review
   epic-5-retrospective: optional

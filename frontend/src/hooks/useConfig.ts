@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Config, ConfigWrite } from '@/types'
+import type { Config, ConfigWrite, ConfigPatch } from '@/types'
 
 export function useConfig() {
   return useQuery({
@@ -13,6 +13,16 @@ export function useUpdateConfig() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (payload: ConfigWrite) => api.put<Config>('/config', payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['config'] })
+    },
+  })
+}
+
+export function usePatchConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: ConfigPatch) => api.patch<Config>('/config', payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] })
     },

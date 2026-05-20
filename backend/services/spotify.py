@@ -40,14 +40,112 @@ def handle_callback(code: str) -> None:
 def get_auth_status() -> dict:
     try:
         sp_oauth = _get_spotify_oauth()
+    except ValueError:
+        return {"authenticated": False, "has_previous_auth": False, "spotify_user_id": None}
+
+    try:
         token_info = sp_oauth.get_cached_token()
         if token_info is None:
-            return {"authenticated": False, "spotify_user_id": None}
+            return {"authenticated": False, "has_previous_auth": False, "spotify_user_id": None}
         token_info = sp_oauth.validate_token(token_info)
         if token_info is None:
-            return {"authenticated": False, "spotify_user_id": None}
+            return {"authenticated": False, "has_previous_auth": True, "spotify_user_id": None}
         sp = Spotify(auth=token_info["access_token"])
         user = sp.me()
-        return {"authenticated": True, "spotify_user_id": user["id"]}
+        return {"authenticated": True, "has_previous_auth": True, "spotify_user_id": user["id"]}
     except Exception:
-        return {"authenticated": False, "spotify_user_id": None}
+        return {"authenticated": False, "has_previous_auth": True, "spotify_user_id": None}
+
+
+def get_authenticated_client() -> Spotify:
+    """Return an authenticated Spotify client, refreshing the token if needed."""
+    sp_oauth = _get_spotify_oauth()
+    token_info = sp_oauth.get_cached_token()
+    if token_info is None:
+        raise ValueError("Not authenticated — run OAuth2 flow first")
+    token_info = sp_oauth.validate_token(token_info)
+    if token_info is None:
+        raise ValueError("Token expired and could not be refreshed")
+    return Spotify(auth=token_info["access_token"])
+
+
+def get_user_playlists() -> list[dict]:
+    """Fetch all user-owned playlists from Spotify. Returns [{spotify_id, name}]."""
+    sp = get_authenticated_client()
+    user_id = sp.me()["id"]
+    results = []
+    offset = 0
+    limit = 50
+    while True:
+        page = sp.current_user_playlists(limit=limit, offset=offset)
+        for item in page["items"]:
+            if item["owner"]["id"] == user_id:
+                results.append({"spotify_id": item["id"], "name": item["name"]})
+        if page["next"] is None:
+            break
+        offset += limit
+    return results
+
+
+def get_or_create_dynamic_playlist(sp: Spotify) -> str:
+    """Return the Spotify ID of the 'Recent Adds' playlist, creating it if needed."""
+    with Session(engine) as session:
+        config = session.exec(select(Config)).first()
+        stored_id = config.dynamic_playlist_id if config else None
+
+    if stored_id:
+        try:
+            sp.playlist(stored_id, fields="id")
+            return stored_id
+        except Exception:
+            pass  # Playlist deleted on Spotify — fall through to create
+
+    user_id = sp.me()["id"]
+    new_playlist = sp.user_playlist_create(
+        user_id, "Recent Adds", public=False, description="Managed by playlist_spotify"
+    )
+    new_id = new_playlist["id"]
+
+    with Session(engine) as session:
+        config = session.exec(select(Config)).first()
+        if config:
+            config.dynamic_playlist_id = new_id
+            session.add(config)
+            session.commit()
+
+    return new_id
+
+
+def replace_playlist_tracks(playlist_id: str, track_uris: list[str], sp: Spotify) -> None:
+    """Replace playlist contents with track_uris. Handles >100 tracks via chunking."""
+    sp.playlist_replace_items(playlist_id, track_uris[:100])
+    for i in range(100, len(track_uris), 100):
+        sp.playlist_add_items(playlist_id, track_uris[i : i + 100])
+
+
+def get_playlist_tracks(playlist_id: str, sp: Spotify = None) -> list[dict]:
+    """Fetch all tracks from a playlist, paginated (100/page). Returns [{spotify_id, uri, added_at}]."""
+    if sp is None:
+        sp = get_authenticated_client()
+    results = []
+    offset = 0
+    limit = 100
+    while True:
+        page = sp.playlist_items(
+            playlist_id,
+            limit=limit,
+            offset=offset,
+            fields="items(track(id,uri),added_at),next",
+        )
+        for item in page["items"]:
+            track = item.get("track")
+            if track and track.get("id"):  # skip local tracks (id is None)
+                results.append({
+                    "spotify_id": track["id"],
+                    "uri": track["uri"],
+                    "added_at": item["added_at"],
+                })
+        if page["next"] is None:
+            break
+        offset += limit
+    return results

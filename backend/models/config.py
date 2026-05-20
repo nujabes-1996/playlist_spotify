@@ -9,3 +9,4 @@ class Config(SQLModel, table=True):
     playlist_size: int = Field(default=50)
     cron_expr: Optional[str] = None
     spotify_token_json: Optional[str] = None
+    dynamic_playlist_id: Optional[str] = None
