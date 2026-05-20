@@ -12,11 +12,11 @@ export default function DashboardPage() {
   const authStatus = useAuthStatus()
 
   if (config.isPending || authStatus.isPending) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading…</div>
+    return <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
   }
 
   if (config.isError || authStatus.isError) {
-    return <div className="p-6 text-sm text-red-600">Failed to load configuration.</div>
+    return <div className="text-sm text-red-500">Failed to load configuration.</div>
   }
 
   if (config.data.setup_required) {
@@ -28,11 +28,19 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="p-6 space-y-4">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--foreground)]">Your Playlists</h1>
+          <p className="text-sm text-[var(--muted-foreground)] mt-1">
+            Toggle which playlists to include in your next sync
+          </p>
+        </div>
+        <SyncButton />
+      </div>
+
       <SyncStatusBadge />
       <PlaylistList />
-      <SyncButton />
     </div>
   )
 }

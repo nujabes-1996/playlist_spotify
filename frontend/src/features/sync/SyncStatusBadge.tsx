@@ -7,22 +7,27 @@ export default function SyncStatusBadge() {
 
   if (!status) {
     return (
-      <p className="text-sm text-muted-foreground">Last sync: Never synced</p>
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--muted)] text-[var(--muted-foreground)] text-xs font-medium">
+        <span className="w-2 h-2 rounded-full bg-[var(--muted-foreground)]" />
+        Never synced
+      </div>
     )
   }
 
   if (status.status === 'success') {
     return (
-      <p className="text-sm text-green-600">
-        Last sync: Success — {new Date(status.timestamp).toLocaleString()}
-        {status.track_count != null && ` (${status.track_count} tracks)`}
-      </p>
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--spotify-green)]/10 text-[var(--spotify-green)] text-xs font-medium">
+        <span className="w-2 h-2 rounded-full bg-[var(--spotify-green)]" />
+        Last sync: {new Date(status.timestamp).toLocaleString()}
+        {status.track_count != null && ` · ${status.track_count} tracks`}
+      </div>
     )
   }
 
   return (
-    <p className="text-sm text-red-600">
-      Last sync: Failed — {status.error_message ?? 'Unknown error'}
-    </p>
+    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-600/10 text-red-500 text-xs font-medium">
+      <span className="w-2 h-2 rounded-full bg-red-500" />
+      Last sync failed — {status.error_message ?? 'Unknown error'}
+    </div>
   )
 }

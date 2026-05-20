@@ -64,28 +64,44 @@ async def _run_sync_stream():
                 raise ValueError("No playlists selected")
             config = session.exec(sa_select(Config)).first()
             playlist_size = config.playlist_size if config else 50
+            last_sync_at = config.last_sync_at if config else None
 
         yield _sse("sync_log", {"level": "info", "message": f"Found {len(playlists)} included playlist(s)", "timestamp": timestamp})
 
         sp = await asyncio.to_thread(spotify_service.get_authenticated_client)
-        raw_tracks = await asyncio.to_thread(harvest_tracks, playlists, sp)
+        target_id = await asyncio.to_thread(spotify_service.get_or_create_dynamic_playlist, sp)
+        existing_tracks = await asyncio.to_thread(spotify_service.get_playlist_tracks, target_id, sp)
+        existing_ids = {t["spotify_id"] for t in existing_tracks}
 
-        yield _sse("sync_log", {"level": "info", "message": f"Harvested {len(raw_tracks)} tracks", "timestamp": timestamp})
+        if last_sync_at:
+            new_tracks = await asyncio.to_thread(harvest_tracks, playlists, sp, last_sync_at)
+            raw_tracks = new_tracks + existing_tracks
+            yield _sse("sync_log", {"level": "info", "message": f"Delta sync: {len(new_tracks)} new track(s) since last sync", "timestamp": timestamp})
+        else:
+            raw_tracks = await asyncio.to_thread(harvest_tracks, playlists, sp)
+            yield _sse("sync_log", {"level": "info", "message": f"Full sync: harvested {len(raw_tracks)} tracks", "timestamp": timestamp})
 
         deduped = deduplicate(raw_tracks)
         sliced = sort_and_slice(deduped, playlist_size)
+        new_track_count = sum(1 for t in sliced if t["spotify_id"] not in existing_ids)
 
-        yield _sse("sync_log", {"level": "info", "message": f"After dedup/sort: {len(sliced)} tracks", "timestamp": timestamp})
+        yield _sse("sync_log", {"level": "info", "message": f"{new_track_count} new track(s) added to Recent Adds ({len(sliced)} total)", "timestamp": timestamp})
 
-        target_id = await asyncio.to_thread(spotify_service.get_or_create_dynamic_playlist, sp)
         track_uris = [t["uri"] for t in sliced]
         await asyncio.to_thread(spotify_service.replace_playlist_tracks, target_id, track_uris, sp)
 
-        _write_sync_log("success", len(sliced), None, timestamp)
-        yield _sse("sync_complete", {"status": "success", "track_count": len(sliced), "timestamp": timestamp})
+        with Session(engine) as session:
+            cfg = session.exec(sa_select(Config)).first()
+            if cfg:
+                cfg.last_sync_at = timestamp
+                session.add(cfg)
+                session.commit()
+
+        _write_sync_log("success", len(sliced), new_track_count, None, timestamp)
+        yield _sse("sync_complete", {"status": "success", "track_count": len(sliced), "new_track_count": new_track_count, "timestamp": timestamp})
 
     except Exception as exc:
-        _write_sync_log("failure", None, str(exc), timestamp)
+        _write_sync_log("failure", None, None, str(exc), timestamp)
         yield _sse("sync_error", {"status": "error", "message": str(exc), "timestamp": timestamp})
 
 

@@ -9,11 +9,11 @@ from models.playlist import Playlist
 from models.sync_log import SyncLog
 
 
-def harvest_tracks(included_playlists: list, sp) -> list[dict]:
-    """Fetch all tracks from all included playlists. Returns flat list of {spotify_id, uri, added_at}."""
+def harvest_tracks(included_playlists: list, sp, since: str | None = None) -> list[dict]:
+    """Fetch tracks from all included playlists. When since is set, only returns new tracks."""
     all_tracks = []
     for playlist in included_playlists:
-        tracks = spotify_service.get_playlist_tracks(playlist.spotify_id, sp)
+        tracks = spotify_service.get_playlist_tracks(playlist.spotify_id, sp, since=since)
         all_tracks.extend(tracks)
     return all_tracks
 
@@ -37,6 +37,7 @@ def sort_and_slice(tracks: list[dict], playlist_size: int) -> list[dict]:
 def _write_sync_log(
     status: str,
     track_count: int | None,
+    new_track_count: int | None,
     error_message: str | None,
     timestamp: str,
 ) -> None:
@@ -45,6 +46,7 @@ def _write_sync_log(
             SyncLog(
                 status=status,
                 track_count=track_count,
+                new_track_count=new_track_count,
                 error_message=error_message,
                 timestamp=timestamp,
             )
@@ -55,9 +57,10 @@ def _write_sync_log(
 def run_sync() -> dict:
     """
     Full sync pipeline: harvest → dedup → sort → slice → push → log.
-    Returns {"status": "success", "track_count": N} on success.
-    On failure: writes SyncLog with status="failure" and re-raises the exception.
-    Existing dynamic playlist is preserved on any error (NFR10).
+
+    On first run (no last_sync_at): full fetch from all selected playlists.
+    On subsequent runs: fetches only tracks added since last_sync_at, merges
+    with the current Recent Adds content, then re-sorts and slices to playlist_size.
     """
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -70,29 +73,47 @@ def run_sync() -> dict:
                 raise ValueError("No playlists selected")
             config = session.exec(select(Config)).first()
             playlist_size = config.playlist_size if config else 50
+            last_sync_at = config.last_sync_at if config else None
 
         sp = spotify_service.get_authenticated_client()
-        raw_tracks = harvest_tracks(playlists, sp)
+        target_id = spotify_service.get_or_create_dynamic_playlist(sp)
+        existing_tracks = spotify_service.get_playlist_tracks(target_id, sp)
+        existing_ids = {t["spotify_id"] for t in existing_tracks}
+
+        if last_sync_at:
+            new_tracks = harvest_tracks(playlists, sp, since=last_sync_at)
+            raw_tracks = new_tracks + existing_tracks
+        else:
+            raw_tracks = harvest_tracks(playlists, sp)
+
         deduped = deduplicate(raw_tracks)
         sliced = sort_and_slice(deduped, playlist_size)
+        new_track_count = sum(1 for t in sliced if t["spotify_id"] not in existing_ids)
 
-        # Push to Spotify — only reached if harvest/dedup/sort succeeded (NFR10)
-        target_id = spotify_service.get_or_create_dynamic_playlist(sp)
         track_uris = [t["uri"] for t in sliced]
         spotify_service.replace_playlist_tracks(target_id, track_uris, sp)
+
+        with Session(engine) as session:
+            config = session.exec(select(Config)).first()
+            if config:
+                config.last_sync_at = timestamp
+                session.add(config)
+                session.commit()
 
         _write_sync_log(
             status="success",
             track_count=len(sliced),
+            new_track_count=new_track_count,
             error_message=None,
             timestamp=timestamp,
         )
-        return {"status": "success", "track_count": len(sliced)}
+        return {"status": "success", "track_count": len(sliced), "new_track_count": new_track_count}
 
     except Exception as exc:
         _write_sync_log(
             status="failure",
             track_count=None,
+            new_track_count=None,
             error_message=str(exc),
             timestamp=timestamp,
         )

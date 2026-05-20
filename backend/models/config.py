@@ -10,3 +10,4 @@ class Config(SQLModel, table=True):
     cron_expr: Optional[str] = None
     spotify_token_json: Optional[str] = None
     dynamic_playlist_id: Optional[str] = None
+    last_sync_at: Optional[str] = None

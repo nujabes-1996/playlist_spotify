@@ -7,7 +7,9 @@ from database import engine
 from models.config import Config
 from services.token_manager import SQLiteCacheHandler
 
-SCOPES = "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-private"
+SCOPES = "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-private user-library-read"
+
+LIKED_SONGS_ID = "liked_songs"
 REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8000/api/v1/auth/callback")
 
 
@@ -70,16 +72,21 @@ def get_authenticated_client() -> Spotify:
 
 
 def get_user_playlists() -> list[dict]:
-    """Fetch all user-owned playlists from Spotify. Returns [{spotify_id, name}]."""
+    """Fetch all user-owned playlists + Liked Songs. Returns [{spotify_id, name}]."""
     sp = get_authenticated_client()
     user_id = sp.me()["id"]
-    results = []
+
+    with Session(engine) as session:
+        config = session.exec(select(Config)).first()
+        dynamic_playlist_id = config.dynamic_playlist_id if config else None
+
+    results = [{"spotify_id": LIKED_SONGS_ID, "name": "Titres likés"}]
     offset = 0
     limit = 50
     while True:
         page = sp.current_user_playlists(limit=limit, offset=offset)
         for item in page["items"]:
-            if item["owner"]["id"] == user_id:
+            if item["owner"]["id"] == user_id and item["id"] != dynamic_playlist_id:
                 results.append({"spotify_id": item["id"], "name": item["name"]})
         if page["next"] is None:
             break
@@ -100,9 +107,8 @@ def get_or_create_dynamic_playlist(sp: Spotify) -> str:
         except Exception:
             pass  # Playlist deleted on Spotify — fall through to create
 
-    user_id = sp.me()["id"]
-    new_playlist = sp.user_playlist_create(
-        user_id, "Recent Adds", public=False, description="Managed by playlist_spotify"
+    new_playlist = sp.current_user_playlist_create(
+        "Recent Adds", public=False, description="Managed by playlist_spotify"
     )
     new_id = new_playlist["id"]
 
@@ -123,27 +129,88 @@ def replace_playlist_tracks(playlist_id: str, track_uris: list[str], sp: Spotify
         sp.playlist_add_items(playlist_id, track_uris[i : i + 100])
 
 
-def get_playlist_tracks(playlist_id: str, sp: Spotify = None) -> list[dict]:
-    """Fetch all tracks from a playlist, paginated (100/page). Returns [{spotify_id, uri, added_at}]."""
-    if sp is None:
-        sp = get_authenticated_client()
+def _get_liked_tracks(sp: Spotify, since: str | None = None) -> list[dict]:
+    """Fetch saved/liked tracks, stopping early at `since` (API returns newest-first)."""
     results = []
     offset = 0
+    limit = 50
+    while True:
+        page = sp.current_user_saved_tracks(limit=limit, offset=offset)
+        done = False
+        for item in page["items"]:
+            track = item.get("track")
+            if track and track.get("id"):
+                added_at = item.get("added_at") or ""
+                if since and added_at <= since:
+                    done = True
+                    break
+                results.append({"spotify_id": track["id"], "uri": track["uri"], "added_at": added_at})
+        if done or page["next"] is None:
+            break
+        offset += limit
+    return results
+
+
+def get_playlist_tracks(playlist_id: str, sp: Spotify = None, since: str | None = None) -> list[dict]:
+    """
+    Fetch tracks from a playlist (or Liked Songs).
+
+    When `since` is provided, only returns tracks with added_at > since.
+    For regular playlists (insertion-ordered oldest-first), reverse-paginates from
+    the end and stops as soon as a page contains any track at or before `since`.
+    """
+    if sp is None:
+        sp = get_authenticated_client()
+    if playlist_id == LIKED_SONGS_ID:
+        return _get_liked_tracks(sp, since=since)
+
     limit = 100
+    results = []
+
+    if since:
+        probe = sp.playlist_items(playlist_id, limit=1, fields="total")
+        total = probe.get("total", 0)
+        if total == 0:
+            return []
+        offset = ((total - 1) // limit) * limit  # last page
+
+        while True:
+            page = sp.playlist_items(
+                playlist_id,
+                limit=limit,
+                offset=offset,
+                fields="items(item(id,uri),added_at),next",
+            )
+            has_old = False
+            for item in page["items"]:
+                track = item.get("item")
+                if track and track.get("id"):
+                    added_at = item.get("added_at") or ""
+                    if added_at <= since:
+                        has_old = True
+                    else:
+                        results.append({"spotify_id": track["id"], "uri": track["uri"], "added_at": added_at})
+            if has_old or offset == 0:
+                break
+            offset = max(0, offset - limit)
+        return results
+
+    # Full fetch (no since filter)
+    offset = 0
     while True:
         page = sp.playlist_items(
             playlist_id,
             limit=limit,
             offset=offset,
-            fields="items(track(id,uri),added_at),next",
+            fields="items(item(id,uri),added_at),next",
         )
         for item in page["items"]:
-            track = item.get("track")
-            if track and track.get("id"):  # skip local tracks (id is None)
+            track = item.get("item")
+            if track and track.get("id"):
                 results.append({
                     "spotify_id": track["id"],
                     "uri": track["uri"],
-                    "added_at": item["added_at"],
+                    "added_at": item.get("added_at") or "",
                 })
         if page["next"] is None:
             break
