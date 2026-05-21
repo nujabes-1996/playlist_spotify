@@ -72,7 +72,10 @@ def get_authenticated_client() -> Spotify:
 
 
 def get_user_playlists() -> list[dict]:
-    """Fetch all user-owned playlists + Liked Songs. Returns [{spotify_id, name}]."""
+    """Fetch all user-owned playlists + Liked Songs.
+
+    Returns [{spotify_id, name, image_url, track_count}].
+    """
     sp = get_authenticated_client()
     user_id = sp.me()["id"]
 
@@ -80,22 +83,83 @@ def get_user_playlists() -> list[dict]:
         config = session.exec(select(Config)).first()
         dynamic_playlist_id = config.dynamic_playlist_id if config else None
 
-    results = [{"spotify_id": LIKED_SONGS_ID, "name": "Titres likés"}]
+    liked_total = sp.current_user_saved_tracks(limit=1)["total"]
+    results = [
+        {
+            "spotify_id": LIKED_SONGS_ID,
+            "name": "Titres likés",
+            "image_url": None,
+            "track_count": liked_total,
+        }
+    ]
     offset = 0
     limit = 50
     while True:
         page = sp.current_user_playlists(limit=limit, offset=offset)
         for item in page["items"]:
-            if item["owner"]["id"] == user_id and item["id"] != dynamic_playlist_id:
-                results.append({"spotify_id": item["id"], "name": item["name"]})
+            if not item:
+                continue
+            owner = item.get("owner") or {}
+            if owner.get("id") == user_id and item.get("id") != dynamic_playlist_id:
+                images = item.get("images") or []
+                image_url = images[0]["url"] if images else None
+                tracks = item.get("tracks") or {}
+                results.append(
+                    {
+                        "spotify_id": item["id"],
+                        "name": item.get("name", ""),
+                        "image_url": image_url,
+                        "track_count": tracks.get("total", 0),
+                    }
+                )
         if page["next"] is None:
             break
         offset += limit
     return results
 
 
+DYNAMIC_PLAYLIST_NAME = "Recent Adds"
+DYNAMIC_PLAYLIST_DESCRIPTION = "Managed by playlist_spotify"
+
+
+def _persist_dynamic_playlist_id(playlist_id: str) -> None:
+    with Session(engine) as session:
+        config = session.exec(select(Config)).first()
+        if config and config.dynamic_playlist_id != playlist_id:
+            config.dynamic_playlist_id = playlist_id
+            session.add(config)
+            session.commit()
+
+
+def _find_existing_dynamic_playlist(sp: Spotify) -> str | None:
+    """Search the user's playlists for a previously-created 'Recent Adds' managed by us."""
+    user_id = sp.me()["id"]
+    offset = 0
+    limit = 50
+    while True:
+        page = sp.current_user_playlists(limit=limit, offset=offset)
+        for item in page["items"]:
+            if not item:
+                continue
+            owner = item.get("owner") or {}
+            if owner.get("id") != user_id:
+                continue
+            if item.get("name") == DYNAMIC_PLAYLIST_NAME and (
+                item.get("description") == DYNAMIC_PLAYLIST_DESCRIPTION
+            ):
+                return item["id"]
+        if page["next"] is None:
+            return None
+        offset += limit
+
+
 def get_or_create_dynamic_playlist(sp: Spotify) -> str:
-    """Return the Spotify ID of the 'Recent Adds' playlist, creating it if needed."""
+    """Return the Spotify ID of the 'Recent Adds' playlist, creating it if needed.
+
+    Self-heals when config.dynamic_playlist_id is missing but the playlist already
+    exists on Spotify (e.g. legacy installs where the create succeeded but the config
+    write didn't commit) — searches by name + managed description and re-adopts it.
+    """
     with Session(engine) as session:
         config = session.exec(select(Config)).first()
         stored_id = config.dynamic_playlist_id if config else None
@@ -105,20 +169,19 @@ def get_or_create_dynamic_playlist(sp: Spotify) -> str:
             sp.playlist(stored_id, fields="id")
             return stored_id
         except Exception:
-            pass  # Playlist deleted on Spotify — fall through to create
+            pass  # Playlist deleted on Spotify — fall through
+
+    # Re-adopt an existing managed playlist before creating a duplicate
+    existing_id = _find_existing_dynamic_playlist(sp)
+    if existing_id:
+        _persist_dynamic_playlist_id(existing_id)
+        return existing_id
 
     new_playlist = sp.current_user_playlist_create(
-        "Recent Adds", public=False, description="Managed by playlist_spotify"
+        DYNAMIC_PLAYLIST_NAME, public=False, description=DYNAMIC_PLAYLIST_DESCRIPTION
     )
     new_id = new_playlist["id"]
-
-    with Session(engine) as session:
-        config = session.exec(select(Config)).first()
-        if config:
-            config.dynamic_playlist_id = new_id
-            session.add(config)
-            session.commit()
-
+    _persist_dynamic_playlist_id(new_id)
     return new_id
 
 

@@ -67,7 +67,7 @@ def run_sync() -> dict:
     try:
         with Session(engine) as session:
             playlists = session.exec(
-                select(Playlist).where(Playlist.is_included == True)  # noqa: E712
+                select(Playlist).where(Playlist.is_included == True, Playlist.is_hidden == False)  # noqa: E712
             ).all()
             if not playlists:
                 raise ValueError("No playlists selected")

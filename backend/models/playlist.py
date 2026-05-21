@@ -7,3 +7,4 @@ class Playlist(SQLModel, table=True):
     spotify_id: str = Field(unique=True)
     name: str
     is_included: bool = Field(default=False)
+    is_hidden: bool = Field(default=False, sa_column_kwargs={"server_default": "0"})

@@ -108,11 +108,14 @@ def test_run_sync_returns_sliced_tracks(session):
         patch("services.sync_engine.spotify_service.get_authenticated_client", return_value=mock_sp),
         patch(
             "services.sync_engine.spotify_service.get_playlist_tracks",
-            side_effect=[PLAYLIST_A, PLAYLIST_B],
+            # 1st call: existing tracks in dynamic playlist (empty on first run)
+            # 2nd call: pl1, 3rd call: pl2
+            side_effect=[[], PLAYLIST_A, PLAYLIST_B],
         ),
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks"),
     ):
         result = sync_engine.run_sync()
 
-    assert result == {"status": "success", "track_count": 2}  # playlist_size=2
+    # playlist_size=2, all tracks are new (dynamic playlist was empty)
+    assert result == {"status": "success", "track_count": 2, "new_track_count": 2}

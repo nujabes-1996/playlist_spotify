@@ -1,5 +1,5 @@
 # generated: 2026-05-06
-# last_updated: 2026-05-19
+# last_updated: 2026-05-20
 # project: playlist_spotify
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-06
-last_updated: 2026-05-20  # 5-2 + 5-3 → review
+last_updated: 2026-05-20  # Story 8.1 → review
 project: playlist_spotify
 
 project_key: NOKEY
@@ -80,3 +80,30 @@ development_status:
   5-2-sync-failure-indicator: review
   5-3-real-time-sse-sync-streaming: review
   epic-5-retrospective: optional
+
+  # Epic 6: Spotify Desktop UI Foundation
+  epic-6: in-progress
+  6-1-design-tokens-dark-theme: review
+  6-2-appshell-v2-sidebar-header-layout: review
+  6-3-routes-recently-added-settings-rename: review
+  6-4-desktop-first-responsive-layout: review
+  epic-6-retrospective: optional
+
+  # Epic 7: Playlist Grid & Hide Management
+  epic-7: in-progress
+  7-1-playlist-hidden-state-schema-api: review
+  7-2-playlist-grid-cover-art-card-layout: review
+  7-3-hide-playlist-action: review
+  7-4-hidden-playlists-section-unhide-flow: review
+  7-5-grid-performance-lazy-cover-images: review
+  epic-7-retrospective: optional
+
+  # Epic 8: Recently Added Page & Track Blacklist
+  epic-8: in-progress
+  8-1-track-blacklist-model-api: review
+  8-2-recently-added-api: backlog
+  8-3-recently-added-page-track-table: backlog
+  8-4-per-track-blacklist-action: backlog
+  8-5-sync-integration-blacklist-filter: backlog
+  8-6-recently-added-performance-polish: backlog
+  epic-8-retrospective: optional

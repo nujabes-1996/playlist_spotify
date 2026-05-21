@@ -44,13 +44,14 @@ def test_get_or_create_creates_when_no_stored_id(session):
 
     mock_sp = MagicMock()
     mock_sp.me.return_value = {"id": "user123"}
-    mock_sp.user_playlist_create.return_value = {"id": "new_playlist_id"}
+    mock_sp.current_user_playlists.return_value = {"items": [], "next": None}
+    mock_sp.current_user_playlist_create.return_value = {"id": "new_playlist_id"}
 
     with patch("services.spotify.engine", session.get_bind()):
         result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp)
 
     assert result == "new_playlist_id"
-    mock_sp.user_playlist_create.assert_called_once()
+    mock_sp.current_user_playlist_create.assert_called_once()
     config = session.exec(select(Config)).first()
     assert config.dynamic_playlist_id == "new_playlist_id"
 
@@ -62,13 +63,14 @@ def test_get_or_create_recreates_on_invalid_stored_id(session):
     mock_sp = MagicMock()
     mock_sp.playlist.side_effect = Exception("404 Not Found")
     mock_sp.me.return_value = {"id": "user123"}
-    mock_sp.user_playlist_create.return_value = {"id": "new_id"}
+    mock_sp.current_user_playlists.return_value = {"items": [], "next": None}
+    mock_sp.current_user_playlist_create.return_value = {"id": "new_id"}
 
     with patch("services.spotify.engine", session.get_bind()):
         result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp)
 
     assert result == "new_id"
-    mock_sp.user_playlist_create.assert_called_once()
+    mock_sp.current_user_playlist_create.assert_called_once()
 
 
 # ────────────────────────────────────────────────────────────
@@ -139,7 +141,9 @@ def test_run_sync_success_returns_dict(session):
     ):
         result = sync_engine.run_sync()
 
-    assert result == {"status": "success", "track_count": 2}
+    assert result["status"] == "success"
+    assert result["track_count"] == 2
+    assert "new_track_count" in result
 
 
 def test_run_sync_no_playlists_writes_failure_log(session):

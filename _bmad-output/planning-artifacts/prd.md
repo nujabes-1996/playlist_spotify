@@ -62,11 +62,14 @@ Spotify's "Liked Songs" conflates everything into one flat list. This tool respe
 - Background scheduler with user-configured cron recurrence
 - Track harvest: deduplicate across playlists, sort by `added_at` descending, select top N
 - Create/update target dynamic playlist on Spotify
-- React dashboard: playlist list with include/exclude toggle
+- **Spotify Desktop-inspired UI** — dark theme, sidebar navigation, card grid layouts
+- **Playlist grid view**: square cover-image cards (Spotify desktop look) with include/exclude toggle
+- **Hide playlists**: hidden playlists are excluded from sync AND removed from the main grid; managed via a collapsible "Hidden playlists" section
+- **Recently Added page**: track-list view (Spotify desktop style) showing the current dynamic playlist contents, with per-track blacklist (hide) action
 - Configuration UI: playlist size, Spotify credentials, cron recurrence
 - Manual sync trigger
 - Real-time sync logs (SSE/WebSocket) with timestamp + error cause
-- Mobile-first responsive layout
+- Responsive layout (desktop-first, smartphone-usable)
 
 **Risk mitigations:**
 - OAuth token expiry → server-side refresh with re-auth UI flow for hard failures
@@ -75,11 +78,12 @@ Spotify's "Liked Songs" conflates everything into one flat list. This tool respe
 ### Phase 2 — Growth
 
 - Preview mode: show resulting track list before applying sync
-- Track blacklist: permanently exclude specific tracks from harvest
 - Auto-exclusion of collaborative playlists
 - Sync history timeline
 - Stats: top artists and genres in the dynamic playlist
 - Notifications (email or Telegram) on sync completion or failure
+- Bulk track actions on Recently Added page (multi-select blacklist)
+- Restore blacklisted tracks (review & un-blacklist UI)
 
 ### Phase 3 — Vision
 
@@ -129,6 +133,26 @@ He opens the dashboard, sees the new playlist already listed (refreshed from Spo
 
 ---
 
+### Journey 5 — Curating the Playlist Grid
+
+**Kevin has 47 playlists, but only a dozen feed Recent Adds.**
+
+He opens the dashboard. His included playlists are displayed as a Spotify-style square grid of cover-art cards. The 30+ playlists he never wants to harvest (old, archived, friends-shared) used to clutter the view. He clicks the ⋯ menu on each clutter playlist → "Hide". They vanish from the grid and are simultaneously excluded from the next sync. A collapsible "Hidden playlists (32)" section at the bottom lets him expand, review, and "Unhide" any if needed.
+
+**Capabilities revealed:** card grid layout with cover art, hide-from-grid + auto-exclude, hidden-section accordion, unhide flow.
+
+---
+
+### Journey 6 — Pruning Recently Added
+
+**Kevin opens the Recently Added page and sees a track he doesn't want there.**
+
+A track auto-added from his "Workout" playlist isn't right for the unified queue he wants. He clicks the ⋯ menu on the track row → "Hide from Recent Adds". The track is blacklisted; next sync removes it from the Spotify playlist and it won't ever come back as long as the blacklist is active.
+
+**Capabilities revealed:** track-level list view with per-row actions, blacklist persistence, post-sync clean playlist.
+
+---
+
 ### Journey Requirements Summary
 
 | Capability | Journeys |
@@ -140,6 +164,10 @@ He opens the dashboard, sees the new playlist already listed (refreshed from Spo
 | One-click manual sync | 1, 3 |
 | Logs with timestamp + error cause | 3 |
 | Dynamic playlist list refresh from API | 4 |
+| Spotify-style grid with cover images | 5 |
+| Hide playlist (visual + sync exclusion) + hidden section | 5 |
+| Recently Added track-list page | 6 |
+| Per-track blacklist action | 6 |
 
 ## Web Application Requirements
 
@@ -153,9 +181,23 @@ He opens the dashboard, sees the new playlist already listed (refreshed from Spo
 ### Platform Constraints
 
 - Browser target: latest stable Chrome and Firefox only
-- Mobile-first responsive layout — playlist toggles, sync button, and log viewer usable on smartphone
+- Desktop-first responsive layout — full Spotify-desktop look on wide screens, gracefully degrades to a usable smartphone experience
 - OAuth callback handled server-side; tokens never exposed to browser
 - Scheduler runs as background process independent of web server process
+
+### UI & Visual Design
+
+> 📐 **Source de vérité UX**: voir [`ux-design/README.md`](./ux-design/README.md) (handoff Claude Design, intégré 2026-05-20). Le présent paragraphe reste un résumé haut niveau — pour les tokens exacts, composants nommés (AppShell, PlaylistCard, TrackRow, HiddenPlaylistsAccordion), hover states et interactions, se référer au handoff.
+
+The dashboard adopts a **Spotify Desktop-inspired visual language**:
+
+- **Theme:** Dark mode by default. Primary background near-black (`#121212`-class), elevated surfaces in dark gray, Spotify-green accent (`#1DB954`-class) reserved for primary actions and active states.
+- **Layout:** Persistent left sidebar (logo, primary navigation: Dashboard / Recently Added / Settings / Logs); main content area with top header (page title, sync status badge, manual sync button); generous spacing.
+- **Playlist grid:** Square cards displaying the Spotify playlist cover image, playlist name, and track count. Hover reveals a play/details affordance and a ⋯ overflow menu (Include toggle, Hide). Active include state is communicated visually (border, badge, or accent ring).
+- **Recently Added page:** Track table with columns inspired by Spotify desktop — `#` index, Title (with track cover thumbnail + title/artist), Album, Date Added, Duration, and a ⋯ overflow menu per row (Hide / Blacklist). Row hover highlights; sticky header on scroll.
+- **Hidden playlists:** Collapsible accordion below the active grid, default-collapsed, labeled with count (e.g. "Hidden playlists (32)"); expanding shows the same card layout with a clear "Unhide" affordance per card.
+- **Typography & density:** Sans-serif system stack, tight track-list density on Recently Added, comfortable density on the playlist grid.
+- **Accessibility:** AA contrast on text vs background; focus rings visible on keyboard navigation; ⋯ menus reachable via keyboard.
 
 ## Functional Requirements
 
@@ -201,14 +243,33 @@ He opens the dashboard, sees the new playlist already listed (refreshed from Spo
 - **FR23:** The dashboard surfaces a visible failure indicator when the last sync failed
 - **FR24:** User can access the full sync log history
 
+### Playlist Grid & Hiding
+
+- **FR25:** The dashboard displays user playlists as a grid of square cards showing the Spotify cover image, playlist name, and track count
+- **FR26:** User can hide a playlist from the main grid via a per-card overflow menu
+- **FR27:** Hiding a playlist also excludes it from the next and subsequent syncs (hidden ⇒ excluded)
+- **FR28:** Hidden playlists are accessible in a collapsible "Hidden playlists" section showing a count and the same card layout
+- **FR29:** User can unhide a playlist from the hidden section, which restores it to the main grid (include/exclude state defaults to excluded; user must explicitly toggle include again)
+- **FR30:** Hidden state is persisted across sessions
+
+### Recently Added Page
+
+- **FR31:** User can navigate to a dedicated "Recently Added" page showing the current contents of the dynamic Spotify playlist
+- **FR32:** Tracks are displayed in a list view with columns: index, title + artist + cover thumbnail, album, date added, duration
+- **FR33:** Each row exposes an overflow menu with a "Hide / Blacklist" action
+- **FR34:** Blacklisting a track persistently excludes it from all future syncs
+- **FR35:** The next sync after a track is blacklisted removes that track from the dynamic Spotify playlist
+- **FR36:** Blacklist state is persisted across sessions
+
 ### Phase 2 Capabilities
 
-- **FR25:** User can preview the track list resulting from the next sync before applying it
-- **FR26:** User can blacklist specific tracks to permanently exclude them from the dynamic playlist
-- **FR27:** The system can automatically exclude collaborative playlists from the harvest
-- **FR28:** User can view a timeline of past sync operations
-- **FR29:** User can view aggregated stats on the dynamic playlist (top artists, top genres)
-- **FR30:** User can configure notifications for sync completion or failure events
+- **FR37:** User can preview the track list resulting from the next sync before applying it
+- **FR38:** The system can automatically exclude collaborative playlists from the harvest
+- **FR39:** User can view a timeline of past sync operations
+- **FR40:** User can view aggregated stats on the dynamic playlist (top artists, top genres)
+- **FR41:** User can configure notifications for sync completion or failure events
+- **FR42:** User can multi-select tracks on the Recently Added page for bulk blacklist
+- **FR43:** User can review and un-blacklist previously hidden tracks
 
 ## Non-Functional Requirements
 
@@ -218,6 +279,8 @@ He opens the dashboard, sees the new playlist already listed (refreshed from Spo
 - Playlist list refresh from Spotify API: under 2 seconds
 - Real-time sync log events delivered to UI: within 1 second of backend emission
 - Sync engine processes up to 5,000 tracks within 30 seconds
+- Playlist grid renders within 1 second of API response for up to 100 playlists; cover images lazy-loaded
+- Recently Added track list renders within 1 second for up to 200 tracks
 
 ### Security
 

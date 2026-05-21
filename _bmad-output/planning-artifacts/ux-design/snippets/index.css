@@ -1,0 +1,77 @@
+/* frontend/src/index.css
+ * Drop-in shadcn dark theme override for playlist_spotify.
+ * Replace the existing :root / .dark block from shadcn's defaults with this.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root, .dark {
+    /* --- shadcn HSL bridge (so existing primitives pick this up) --- */
+    --background: 0 0% 7%;            /* #121212 */
+    --foreground: 0 0% 100%;
+    --card: 0 0% 11%;                 /* #1c1c1c */
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 14%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 141 76% 48%;           /* #1DB954 */
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 16%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 70%;
+    --accent: 141 76% 48%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 354 76% 54%;       /* #e22134 */
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 100% / 0.09;
+    --input: 0 0% 14%;
+    --ring: 141 76% 48%;
+    --radius: 0.5rem;
+
+    /* --- app-level tokens used directly via arbitrary properties --- */
+    --bg-base:        #0d0d0d;
+    --bg-app:         #121212;
+    --bg-elevated:    #1c1c1c;
+    --bg-elevated-2:  #232323;
+    --bg-hover:       #2a2a2a;
+    --bg-row-hover:   #1a1a1a;
+    --bg-row-active:  #2a2a2a;
+
+    --text-primary:   #ffffff;
+    --text-secondary: #b3b3b3;
+    --text-muted:     #6a6a6a;
+    --text-faint:     #4a4a4a;
+
+    --accent-color:   #1DB954;
+    --accent-hover:   #1ed760;
+    --accent-soft:    rgba(29, 185, 84, 0.12);
+    --danger:         #e22134;
+    --warning:        #f0b400;
+
+    --border-soft:    rgba(255, 255, 255, 0.06);
+    --border-strong:  rgba(255, 255, 255, 0.16);
+
+    --sidebar-w: 248px;
+    --header-h:  64px;
+  }
+
+  html, body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+                 "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  /* Spin used by Sync button + loading icons */
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+}

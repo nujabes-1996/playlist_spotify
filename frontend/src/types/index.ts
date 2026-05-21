@@ -26,6 +26,9 @@ export interface Playlist {
   spotify_id: string
   name: string
   is_included: boolean
+  is_hidden: boolean
+  image_url: string | null
+  track_count: number
 }
 
 export interface SyncLog {

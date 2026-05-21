@@ -203,9 +203,37 @@ playlist_spotify/
 - Affects: all UI components
 
 **Routing: React Router v7**
-- Decision: React Router v7 (SPA mode)
-- Routes: `/` (dashboard), `/config` (settings), `/logs` (sync history)
+- Decision: React Router v7 (SPA mode) via `react-router-dom`
+- Routes: `/` (Dashboard), `/recently-added` (Recently Added), `/settings` (formerly `/config` — redirects), `/logs` (Logs)
+- `AppShell` is the layout route parent (sidebar + topbar persistent)
 - Affects: App entry point, navigation structure
+
+---
+
+### Design System & UI Primitives
+
+**Source de vérité UX:** [`ux-design/README.md`](./ux-design/README.md) (Claude Design handoff, 2026-05-20).
+
+**Design tokens:** centralisés dans `frontend/src/index.css`. Bloc à reprendre tel quel depuis `ux-design/snippets/index.css`. Tokens majeurs :
+- Surfaces : `--bg-base #0d0d0d`, `--bg-app #121212`, `--bg-elevated #1c1c1c`, `--bg-elevated-2 #232323`, `--bg-hover #2a2a2a`
+- Texte : `--text-primary #fff`, `--text-secondary #b3b3b3`, `--text-muted #6a6a6a`
+- Accent : `--accent #1DB954`, `--accent-hover #1ed760`, `--accent-fg #000`
+- Layout : `--sidebar-w 248px`, `--header-h 64px`
+- Radius : `--r-md 6px`, `--r-lg 8px`, `--r-pill 999px`
+
+**Theme:** dark forcé (`class="dark"` sur `<html>` dans `index.html`). Pas de toggle utilisateur.
+
+**Composants shadcn/ui requis** (au-delà de Button déjà installé) : `Accordion`, `DropdownMenu`, `Tooltip`, `Sheet`, `Input`, `Label`, `Separator`. Installation via `bash ux-design/snippets/shadcn-add.sh` ou commandes individuelles `npx shadcn@latest add <component>` (cf. CLAUDE.md : toujours via CLI, jamais à la main).
+
+**Composants applicatifs livrés par le handoff (drop-in baselines):**
+- `frontend/src/components/AppShell.tsx` — layout grid 2 colonnes (sidebar + main area avec gradient top)
+- `frontend/src/components/PlaylistCard.tsx` — carte playlist avec hover Play FAB + overflow menu
+- `frontend/src/components/TrackRow.tsx` — ligne de table track 6 colonnes
+- `frontend/src/components/HiddenPlaylistsAccordion.tsx` — accordion shadcn collapsé par défaut
+
+**Icônes:** `lucide-react` exclusivement. Liste utilisée : LayoutDashboard, Clock, Settings, ScrollText, ChevronLeft, ChevronRight, ChevronDown, RotateCw, Search, Play, MoreHorizontal, Check, Eye, EyeOff, ExternalLink, Sparkles.
+
+**Override projet — SSE Logs:** le snippet `useEffect` always-on du README handoff (section Logs route) est non-applicable. L'`EventSource` est ouvert uniquement pendant un sync actif (cf. FR21 + Story 5.3).
 
 ---
 

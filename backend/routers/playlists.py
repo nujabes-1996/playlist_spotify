@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlmodel import select
@@ -13,10 +15,14 @@ class PlaylistRead(BaseModel):
     spotify_id: str
     name: str
     is_included: bool
+    is_hidden: bool
+    image_url: Optional[str] = None
+    track_count: Optional[int] = None
 
 
 class PlaylistPatch(BaseModel):
-    is_included: bool
+    is_included: Optional[bool] = None
+    is_hidden: Optional[bool] = None
 
 
 @router.get("/playlists", response_model=list[PlaylistRead])
@@ -27,6 +33,10 @@ def get_playlists(session: SessionDep) -> list[PlaylistRead]:
         raise HTTPException(status_code=401, detail=str(exc))
 
     spotify_ids = {p["spotify_id"] for p in spotify_playlists}
+    meta_map = {
+        p["spotify_id"]: (p.get("image_url"), p.get("track_count"))
+        for p in spotify_playlists
+    }
 
     # Upsert: add new rows, update name of existing
     for p in spotify_playlists:
@@ -47,10 +57,20 @@ def get_playlists(session: SessionDep) -> list[PlaylistRead]:
     session.commit()
 
     rows = session.exec(select(Playlist)).all()
-    return [
-        PlaylistRead(spotify_id=r.spotify_id, name=r.name, is_included=r.is_included)
-        for r in rows
-    ]
+    result = []
+    for r in rows:
+        image_url, track_count = meta_map.get(r.spotify_id, (None, None))
+        result.append(
+            PlaylistRead(
+                spotify_id=r.spotify_id,
+                name=r.name,
+                is_included=r.is_included,
+                is_hidden=r.is_hidden,
+                image_url=image_url,
+                track_count=track_count,
+            )
+        )
+    return result
 
 
 @router.patch("/playlists/{spotify_id}", response_model=PlaylistRead)
@@ -62,11 +82,23 @@ def toggle_playlist(
     ).first()
     if playlist is None:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    playlist.is_included = payload.is_included
+
+    if payload.is_hidden is True:
+        playlist.is_hidden = True
+        playlist.is_included = False
+    elif payload.is_hidden is False:
+        playlist.is_hidden = False
+
+    if payload.is_included is not None:
+        playlist.is_included = payload.is_included
+
     session.commit()
     session.refresh(playlist)
     return PlaylistRead(
         spotify_id=playlist.spotify_id,
         name=playlist.name,
         is_included=playlist.is_included,
+        is_hidden=playlist.is_hidden,
+        image_url=None,
+        track_count=None,
     )
