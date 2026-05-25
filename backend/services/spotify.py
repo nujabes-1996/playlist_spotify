@@ -1,6 +1,6 @@
 import os
 
-from spotipy import Spotify, SpotifyOAuth
+from spotipy import Spotify, SpotifyException, SpotifyOAuth
 from sqlmodel import Session, select
 
 from database import engine
@@ -103,7 +103,7 @@ def get_user_playlists() -> list[dict]:
             if owner.get("id") == user_id and item.get("id") != dynamic_playlist_id:
                 images = item.get("images") or []
                 image_url = images[0]["url"] if images else None
-                tracks = item.get("tracks") or {}
+                tracks = item.get("tracks") or item.get("items") or {}
                 results.append(
                     {
                         "spotify_id": item["id"],
@@ -276,6 +276,70 @@ def get_playlist_tracks(playlist_id: str, sp: Spotify = None, since: str | None 
                     "added_at": item.get("added_at") or "",
                 })
         if page["next"] is None:
+            break
+        offset += limit
+    return results
+
+
+def get_recently_added_tracks() -> list[dict]:
+    """Return the current contents of the dynamic playlist as shaped dicts.
+
+    Returns [] when the dynamic playlist has not been created yet (fresh install)
+    or has been deleted from Spotify. Re-raises ValueError if not authenticated
+    and SpotifyException for non-404 Spotify errors.
+    """
+    with Session(engine) as session:
+        config = session.exec(select(Config)).first()
+        playlist_id = config.dynamic_playlist_id if config else None
+    if not playlist_id:
+        return []
+
+    sp = get_authenticated_client()
+    try:
+        sp.playlist(playlist_id, fields="id")
+    except SpotifyException as exc:
+        if exc.http_status == 404:
+            return []
+        raise
+
+    results: list[dict] = []
+    offset = 0
+    limit = 100
+    while True:
+        page = sp.playlist_items(
+            playlist_id,
+            limit=limit,
+            offset=offset,
+            fields=(
+                "items(added_at,is_local,"
+                "track(id,name,duration_ms,explicit,is_local,is_video,"
+                "artists(name),album(name,images)),"
+                "item(id,name,duration_ms,explicit,is_local,is_video,"
+                "artists(name),album(name,images))),next"
+            ),
+        )
+        for item in page["items"]:
+            if item is None or item.get("is_local"):
+                continue
+            track = item.get("track") or item.get("item")
+            if not track or not track.get("id") or track.get("is_local"):
+                continue
+            album = track.get("album") or {}
+            images = album.get("images") or []
+            artists = [a.get("name") for a in (track.get("artists") or []) if a.get("name")]
+            results.append({
+                "spotify_id": track["id"],
+                "title": track.get("name", ""),
+                "artists": artists,
+                "album": album.get("name", ""),
+                "image_url": images[0]["url"] if images else None,
+                "added_at": item.get("added_at") or "",
+                "duration_ms": int(track.get("duration_ms") or 0),
+                "explicit": bool(track.get("explicit", False)),
+                # Spotify rarely flags `is_video` on normal tracks; default False.
+                "has_video": bool(track.get("is_video", False)),
+            })
+        if page.get("next") is None:
             break
         offset += limit
     return results

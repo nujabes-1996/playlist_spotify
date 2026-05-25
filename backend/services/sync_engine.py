@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import services.blacklist_service as blacklist_service
 import services.spotify as spotify_service
 from sqlmodel import Session, select
 
@@ -74,6 +75,7 @@ def run_sync() -> dict:
             config = session.exec(select(Config)).first()
             playlist_size = config.playlist_size if config else 50
             last_sync_at = config.last_sync_at if config else None
+            blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
 
         sp = spotify_service.get_authenticated_client()
         target_id = spotify_service.get_or_create_dynamic_playlist(sp)
@@ -87,7 +89,15 @@ def run_sync() -> dict:
             raw_tracks = harvest_tracks(playlists, sp)
 
         deduped = deduplicate(raw_tracks)
-        sliced = sort_and_slice(deduped, playlist_size)
+        filtered = [t for t in deduped if t["spotify_id"] not in blacklisted_ids]
+
+        # Delta sync can't backfill: if we're below the target (e.g. user raised
+        # playlist_size, or tracks were blacklisted), do a full harvest to top up.
+        if last_sync_at and len(filtered) < playlist_size:
+            full_tracks = harvest_tracks(playlists, sp)
+            deduped = deduplicate(full_tracks + existing_tracks)
+            filtered = [t for t in deduped if t["spotify_id"] not in blacklisted_ids]
+        sliced = sort_and_slice(filtered, playlist_size)
         new_track_count = sum(1 for t in sliced if t["spotify_id"] not in existing_ids)
 
         track_uris = [t["uri"] for t in sliced]
