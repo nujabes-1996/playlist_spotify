@@ -11,6 +11,7 @@ from routers.auth import router as auth_router
 from routers.blacklist import router as blacklist_router
 from routers.config import router as config_router
 from routers.playlists import router as playlists_router
+from routers.recently_added import router as recently_added_router
 from routers.sync import router as sync_router
 from scheduler import scheduler, bootstrap_scheduler
 
@@ -41,6 +42,7 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(playlists_router, prefix="/api/v1")
 app.include_router(sync_router, prefix="/api/v1")
 app.include_router(blacklist_router, prefix="/api/v1")
+app.include_router(recently_added_router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-06
-last_updated: 2026-05-20  # Story 8.1 → review
+last_updated: 2026-05-21  # Story 8.6 → review
 project: playlist_spotify
 
 project_key: NOKEY
@@ -101,9 +101,9 @@ development_status:
   # Epic 8: Recently Added Page & Track Blacklist
   epic-8: in-progress
   8-1-track-blacklist-model-api: review
-  8-2-recently-added-api: backlog
-  8-3-recently-added-page-track-table: backlog
-  8-4-per-track-blacklist-action: backlog
-  8-5-sync-integration-blacklist-filter: backlog
-  8-6-recently-added-performance-polish: backlog
+  8-2-recently-added-api: review
+  8-3-recently-added-page-track-table: review
+  8-4-per-track-blacklist-action: review
+  8-5-sync-integration-blacklist-filter: review
+  8-6-recently-added-performance-polish: review
   epic-8-retrospective: optional

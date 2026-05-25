@@ -2,6 +2,7 @@ export interface Config {
   setup_required: boolean
   playlist_size: number
   cron_expr: string | null
+  dynamic_playlist_id: string | null
 }
 
 export interface ConfigWrite {
@@ -45,4 +46,16 @@ export interface SyncStreamEvent {
   level: string
   message: string
   timestamp: string
+}
+
+export interface RecentlyAddedTrack {
+  spotify_id: string
+  title: string
+  artists: string[]
+  album: string
+  image_url: string | null
+  added_at: string
+  duration_ms: number
+  explicit: boolean
+  has_video: boolean
 }

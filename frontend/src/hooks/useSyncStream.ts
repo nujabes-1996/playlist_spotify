@@ -32,6 +32,7 @@ export function useSyncStream() {
       esRef.current = null
       queryClient.invalidateQueries({ queryKey: ['sync', 'logs'] })
       queryClient.invalidateQueries({ queryKey: ['sync', 'status'] })
+      queryClient.invalidateQueries({ queryKey: ['recently-added'] })
     }
 
     es.addEventListener('sync_complete', onDone)

@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStatus } from '@/hooks/useAuthStatus'
 import { useSyncStatus } from '@/hooks/useSyncStatus'
 import { useSyncStream } from '@/hooks/useSyncStream'
+import { formatRelative } from '@/lib/relativeTime'
 
 const NAV = [
   { to: '/', label: 'Dashboard', Icon: LayoutDashboard, end: true },
@@ -35,18 +36,6 @@ const NAV = [
   { to: '/settings', label: 'Settings', Icon: Cog, end: false },
   { to: '/logs', label: 'Logs', Icon: ScrollText, end: false },
 ] as const
-
-const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-
-function formatRelative(iso?: string | null): string {
-  if (!iso) return 'never'
-  const diffMs = new Date(iso).getTime() - Date.now()
-  const diffMin = Math.round(diffMs / 60000)
-  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, 'minute')
-  const diffHr = Math.round(diffMin / 60)
-  if (Math.abs(diffHr) < 48) return rtf.format(diffHr, 'hour')
-  return rtf.format(Math.round(diffHr / 24), 'day')
-}
 
 function computeInitials(label: string): string {
   const letters = label.match(/[a-z0-9]/gi)?.slice(0, 2).join('') ?? '??'

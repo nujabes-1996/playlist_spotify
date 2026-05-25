@@ -25,6 +25,7 @@ class ConfigRead(BaseModel):
     setup_required: bool
     playlist_size: int
     cron_expr: Optional[str]
+    dynamic_playlist_id: Optional[str] = None
 
 
 class ConfigWrite(BaseModel):
@@ -38,11 +39,12 @@ class ConfigWrite(BaseModel):
 def get_config(session: SessionDep) -> ConfigRead:
     config = session.exec(select(Config)).first()
     if config is None or not config.client_id:
-        return ConfigRead(setup_required=True, playlist_size=50, cron_expr=None)
+        return ConfigRead(setup_required=True, playlist_size=50, cron_expr=None, dynamic_playlist_id=None)
     return ConfigRead(
         setup_required=False,
         playlist_size=config.playlist_size,
         cron_expr=config.cron_expr,
+        dynamic_playlist_id=config.dynamic_playlist_id,
     )
 
 
@@ -70,6 +72,7 @@ def patch_config(payload: ConfigPatch, session: SessionDep) -> ConfigRead:
         setup_required=not bool(config.client_id),
         playlist_size=config.playlist_size,
         cron_expr=config.cron_expr,
+        dynamic_playlist_id=config.dynamic_playlist_id,
     )
 
 
@@ -91,4 +94,5 @@ def update_config(payload: ConfigWrite, session: SessionDep) -> ConfigRead:
         setup_required=not bool(config.client_id),
         playlist_size=config.playlist_size,
         cron_expr=config.cron_expr,
+        dynamic_playlist_id=config.dynamic_playlist_id,
     )
