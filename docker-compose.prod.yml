@@ -1,0 +1,43 @@
+services:
+  backend:
+    build: ./backend
+    # Pas de --reload en prod (pas de watch fichiers, 1 seul worker pour APScheduler + SQLite).
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      - CORS_ORIGINS=https://${DOMAIN}
+      - FRONTEND_URL=https://${DOMAIN}
+      - SPOTIFY_REDIRECT_URI=https://${DOMAIN}/api/v1/auth/callback
+    volumes:
+      # Seule donnée à conserver : la base SQLite (config, playlists, blacklist, token Spotify).
+      - ./data:/data
+    expose:
+      - "8000"
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ACME_EMAIL=${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Persistance des certificats TLS Caddy (évite de re-demander à Let's Encrypt).
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  caddy_data:
+  caddy_config:

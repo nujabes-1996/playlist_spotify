@@ -1,0 +1,22 @@
+{
+	# Email de contact Let's Encrypt (notifications d'expiration). Optionnel.
+	email {$ACME_EMAIL}
+}
+
+# Le domaine déclenche l'obtention automatique d'un certificat TLS (HTTPS).
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Tout ce qui touche à l'API part vers le backend FastAPI.
+	@api path /api/* /health
+	handle @api {
+		reverse_proxy backend:8000
+	}
+
+	# Le reste : on sert le build statique du frontend (SPA → fallback index.html).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

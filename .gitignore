@@ -26,6 +26,10 @@ data/*.db
 
 # Environment
 .env
+.env.prod
+
+# Backups DB
+backups/
 
 # OS
 .DS_Store
