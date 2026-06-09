@@ -6,10 +6,10 @@ import {
   Eye,
   EyeOff,
   MoreHorizontal,
-  Play,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useNavigate } from 'react-router-dom'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,7 +49,10 @@ function PlaylistCard({
 }: Props) {
   const toggle = useTogglePlaylist()
   const hide = useHidePlaylist()
+  const navigate = useNavigate()
   const [imgFailed, setImgFailed] = useState(false)
+
+  const goToDetail = () => navigate(`/playlists/${playlist.spotify_id}`)
 
   const showPlaceholder = !playlist.image_url || imgFailed
   const { background, initials } = placeholderGradient(playlist.spotify_id, playlist.name)
@@ -63,6 +66,15 @@ function PlaylistCard({
 
   return (
     <div
+      role="link"
+      tabIndex={0}
+      onClick={goToDetail}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          goToDetail()
+        }
+      }}
       className={cn(
         'group relative cursor-pointer rounded-lg bg-[var(--bg-elevated)] p-3.5 transition',
         'hover:bg-[var(--bg-hover)]',
@@ -104,6 +116,7 @@ function PlaylistCard({
 
         <DropdownMenu>
           <DropdownMenuTrigger
+            onClick={(e) => e.stopPropagation()}
             aria-label={`More options for ${playlist.name}`}
             className="absolute right-2 top-2 z-[2] grid h-8 w-8 place-items-center rounded-full bg-black/70 text-white opacity-0 transition group-hover:opacity-100 hover:bg-black/90 focus:opacity-100"
           >
@@ -111,6 +124,7 @@ function PlaylistCard({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
+            onClick={(e) => e.stopPropagation()}
             className="w-56 rounded-md border-0 bg-[#282828] p-1 shadow-[0_16px_24px_rgba(0,0,0,0.5),0_6px_8px_rgba(0,0,0,0.4)]"
           >
             <DropdownMenuGroup>
@@ -167,15 +181,6 @@ function PlaylistCard({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-
-        <button
-          type="button"
-          aria-label="Preview"
-          tabIndex={-1}
-          className="absolute bottom-2 right-2 grid h-11 w-11 translate-y-2 place-items-center rounded-full bg-[var(--accent-color)] text-black opacity-0 shadow-lg transition group-hover:translate-y-0 group-hover:opacity-100 hover:scale-[1.06] hover:bg-[var(--accent-hover)]"
-        >
-          <Play size={16} fill="currentColor" />
-        </button>
       </div>
 
       <h3

@@ -49,6 +49,11 @@ FR33: Each row exposes an overflow menu with a "Hide / Blacklist" action
 FR34: Blacklisting a track persistently excludes it from all future syncs
 FR35: The next sync after a track is blacklisted removes that track from the dynamic Spotify playlist
 FR36: Blacklist state is persisted across sessions
+FR44: User can click a playlist card on the Dashboard to navigate to a dedicated playlist detail page
+FR45: The playlist detail page displays all tracks in the playlist using the same hero + track table layout as Recently Added
+FR46: Each track row on the playlist detail page exposes the same overflow menu as Recently Added: "Hide / Blacklist" and "Open in Spotify"
+FR47: User can filter the displayed tracks within a playlist by title or artist (case-insensitive substring match)
+FR48: User can navigate back to the Dashboard from the playlist detail page (browser back + visible back affordance)
 
 ### NonFunctional Requirements
 
@@ -67,6 +72,7 @@ NFR12: HTTP 429 rate limit responses from Spotify API handled with retry and exp
 NFR13: Playlist grid renders within 1 second of API response for up to 100 playlists; cover images lazy-loaded
 NFR14: Recently Added track list renders within 1 second for up to 200 tracks
 NFR15: Dashboard adopts a Spotify Desktop-inspired visual language — dark theme, persistent left sidebar, accent green (#1DB954-class), AA contrast, visible keyboard focus rings
+NFR16: Playlist detail page initial paint completes within 1.5 seconds for playlists up to 1,000 tracks; uses virtualization for the track table when track count exceeds 200
 
 ### Additional Requirements
 
@@ -82,6 +88,8 @@ NFR15: Dashboard adopts a Spotify Desktop-inspired visual language — dark them
 - AR10: Playlist model gains `is_hidden` boolean (default false); SQLModel auto-migration adds the column on next startup
 - AR11: New `track_blacklist` table — `spotify_id` (str, primary key), `blacklisted_at` (str ISO 8601); auto-created via `SQLModel.metadata.create_all()`
 - AR12: New `GET /api/v1/recently-added` endpoint reads the current dynamic playlist contents from Spotify (paginated), returning tracks with the columns required by FR32
+- AR13: New `GET /api/v1/playlists/{spotify_id}/tracks` endpoint reads playlist contents from Spotify (paginated), returning the same track shape as `GET /api/v1/recently-added` for component reuse
+- AR14: Hero + track table components extracted from `features/recently-added/` to `features/tracks/` and consumed by both Recently Added and Playlist Detail pages — single source of truth for the Spotify-desktop track list pattern
 
 ### UX Design Requirements
 
@@ -135,6 +143,11 @@ FR33: Epic 8 — Each row exposes an overflow menu with "Hide / Blacklist"
 FR34: Epic 8 — Blacklisting a track persistently excludes it from future syncs
 FR35: Epic 8 — Next sync after blacklisting removes the track from the Spotify playlist
 FR36: Epic 8 — Blacklist state persisted across sessions
+FR44: Epic 9 — User can click a playlist card to navigate to detail page
+FR45: Epic 9 — Playlist detail page displays all tracks in same layout as Recently Added
+FR46: Epic 9 — Per-row overflow menu on playlist detail (blacklist + open in Spotify)
+FR47: Epic 9 — User can filter tracks within a playlist by title or artist
+FR48: Epic 9 — User can navigate back to Dashboard from playlist detail
 
 NFR1: Epic 5 — Dashboard initial page load under 3 seconds (Vite build + static assets)
 NFR2: Epic 3 — Playlist list refresh from Spotify API under 2 seconds
@@ -165,6 +178,9 @@ AR12: Epic 8 — GET /api/v1/recently-added reads current dynamic playlist conte
 NFR13: Epic 7 — Playlist grid renders <1s for 100 playlists; cover images lazy-loaded
 NFR14: Epic 8 — Recently Added list renders <1s for 200 tracks
 NFR15: Epic 6 — Spotify Desktop-inspired visual language (dark theme, sidebar, accent green, AA contrast)
+NFR16: Epic 9 — Playlist detail page <1.5s for 1,000 tracks; virtualization beyond 200
+AR13: Epic 9 — GET /api/v1/playlists/{spotify_id}/tracks endpoint
+AR14: Epic 9 — Track table components extracted to features/tracks/ shared module
 
 ## Epic List
 
@@ -199,6 +215,10 @@ The playlist list is replaced by a Spotify-style grid of cover-art cards. Users 
 ### Epic 8: Recently Added Page & Track Blacklist
 A dedicated "Recently Added" page renders the current contents of the dynamic Spotify playlist as a Spotify-desktop-style track table. Users can blacklist any track from a per-row action; the next sync removes the track and prevents it from ever returning.
 **FRs covered:** FR31, FR32, FR33, FR34, FR35, FR36 | AR11, AR12 | NFR14
+
+### Epic 9: Playlist Detail Page
+The user can click any playlist card to open a dedicated detail page reusing the Recently Added hero + track table layout. Tracks can be filtered, blacklisted directly, and virtualized for large playlists.
+**FRs covered:** FR44, FR45, FR46, FR47, FR48 | AR13, AR14 | NFR16
 
 ---
 
@@ -1328,15 +1348,15 @@ So that I can permanently remove a track that shouldn't appear in my dynamic pla
 
 **Given** I click the blacklist action on a row,
 **When** the action fires,
-**Then** the frontend calls `POST /api/v1/blacklist` with `{"spotify_id": "<id>"}` and optimistically removes the row from the table.
+**Then** the frontend calls `POST /api/v1/blacklist` with `{"spotify_id": "<id>"}` and optimistically marks the row as `is_blacklisted: true` (visually grayed out, NOT removed from the list). The "Unhide" inverse action and grayed-row visual treatment are delivered by Story 9.7.
 
 **Given** the request succeeds,
 **When** a toast/banner confirms,
-**Then** the row stays removed and the message indicates "Will be removed from your Spotify playlist on the next sync."
+**Then** the row remains visible (grayed out) and the message indicates "Will be removed from your Spotify playlist on the next sync."
 
 **Given** the request fails,
 **When** the error is caught,
-**Then** the row is restored and a toast explains the failure.
+**Then** the row's `is_blacklisted` flag is reverted to its previous value and a toast explains the failure.
 
 **Given** the action is reachable by keyboard,
 **When** I navigate the table with Tab/Arrow keys and trigger the `⋯` menu via Enter/Space,
@@ -1409,3 +1429,201 @@ So that the page is a reliable daily tool.
 **Given** the table is rendered,
 **When** I tab through rows,
 **Then** focus order is row-by-row top-to-bottom and the active focus row is visually indicated.
+
+---
+
+## Epic 9: Playlist Detail Page
+
+The user can click any playlist card on the Dashboard to open a dedicated detail page reusing the Recently Added hero + track table layout. Tracks can be filtered, blacklisted directly, and the table is virtualized for large playlists.
+
+**FRs covered:** FR44, FR45, FR46, FR47, FR48 | AR13, AR14 | NFR16
+
+---
+
+### Story 9.1: Playlist Tracks API Endpoint
+
+As a developer,
+I want a `GET /api/v1/playlists/{spotify_id}/tracks` endpoint that returns all tracks of a playlist (paginated server-side, full list returned to client) in the same shape as `/recently-added`,
+So that the frontend can reuse the existing track-row components without shape adaptation.
+
+**Implementation hints:**
+- Pattern mirror of `backend/routers/recently_added.py` and `services/spotify.get_recently_added_tracks()` (AR12).
+- Special case: `spotify_id == "liked"` (or similar sentinel) → call `current_user_saved_tracks` instead of `playlist_items` to handle the synthetic "Titres likés" playlist already present in the Dashboard.
+- Reuse the same `RecentlyAddedTrack` shape (rename to a shared `Track` Pydantic model if convenient — keep `added_at`, `has_video`, etc.).
+
+---
+
+### Story 9.2: Shared Track List Components Extraction
+
+As a developer,
+I want `RecentlyAddedHero` and `RecentlyAddedTable` extracted from `frontend/src/features/recently-added/` to a shared `frontend/src/features/tracks/` module (renamed to `TrackListHero` and `TrackListTable` with prop-driven kicker/title/sub-line/actions),
+So that the Recently Added page and the new Playlist Detail page share a single source of truth for the Spotify-desktop track list pattern.
+
+**Implementation hints:**
+- Pure refactor: `RecentlyAddedPage` continues to render identically before/after; only imports change.
+- Hero props: `kicker`, `title`, `subLine` (ReactNode), `coverUrl`, `actions` (ReactNode slot for sync/open/search/⋯).
+- Table props: `tracks`, `isPending`, `emptyMessage`, `onBlacklist` (optional), `onOpenInSpotify` (optional).
+
+---
+
+### Story 9.3: Playlist Detail Page & Navigation
+
+As a user,
+I want clicking a playlist card on the Dashboard to navigate to `/playlists/:spotifyId` and see a hero (cover + name + owner + N tracks + total duration) plus the shared track table listing every track in the playlist,
+So that I can drill into any playlist with the same visual familiarity as Recently Added.
+
+**Implementation hints:**
+- Add `onClick` handler on `PlaylistCard` — must NOT trigger when clicking the ⋯ overflow menu (use `e.stopPropagation()` on the menu trigger).
+- New route in `App.tsx`: `<Route path="/playlists/:spotifyId" element={<PlaylistDetailPage />} />`.
+- New hook `usePlaylistTracks(spotifyId)` mirroring `useRecentlyAdded`.
+- Back navigation: the existing topbar `ChevronLeft` button must become functional (currently disabled in MVP per UX README §1). Implement with `useNavigate(-1)` and enable when `history.length > 1`.
+- Empty playlist → empty-state message ("This playlist has no tracks").
+- Loading → skeleton table reused from Recently Added.
+
+---
+
+### Story 9.4: Per-Track Actions on Playlist Detail
+
+As a user,
+I want the ⋯ overflow menu on each row of the playlist detail page (same as Recently Added: "Hide from Recent Adds" + "Open in Spotify"),
+So that I can blacklist a track from any context — not only from Recently Added.
+
+**Implementation hints:**
+- Reuse the existing `useBlacklist` mutation hook (already global — blacklist is by `spotify_id`, source-agnostic).
+- Optimistic UI: mark row as `is_blacklisted: true` (gray-out visual), revert flag on error (same pattern as amended Story 8.4). The grayed-row visual and "Unhide" inverse action are delivered by Story 9.7.
+- Confirmation toast: "Will be removed from your Spotify Recent Adds playlist on the next sync."
+
+---
+
+### Story 9.5: Filter Tracks within Playlist
+
+As a user,
+I want a search input in the hero actions row that filters the visible tracks by title or artist (case-insensitive substring),
+So that I can quickly locate a track in a 500+ track playlist.
+
+**Implementation hints:**
+- Rounded-full input, width 240px, `Search` icon prefix, placeholder "Filter tracks…" — match the Dashboard topbar filter style.
+- Pure client-side filter on the already-fetched track list (no extra API call).
+- Filter applies to `track.title + track.artists.join(" ")`.
+- When filter is non-empty AND results are 0 → empty-state "No tracks match `<query>`".
+
+---
+
+### Story 9.6: Virtualization for Large Playlists
+
+As a user,
+I want the track table to remain smooth (60fps scroll, <1.5s initial paint) on playlists of 500–1000+ tracks (e.g. Titres likés = 535 tracks),
+So that the page is usable for any of my real-world playlists.
+
+**Implementation hints:**
+- Add `@tanstack/react-virtual` dependency.
+- Activate virtualization in `TrackListTable` only when `tracks.length > 200` (preserve current simple rendering otherwise to avoid over-engineering small lists).
+- Estimate row height: 56px (8px padding × 2 + 40px thumbnail).
+- Sticky header must remain functional in virtualized mode.
+- Verify NFR16: profile on Titres likés (535 tracks) in browser DevTools — initial paint <1.5s on local network.
+
+---
+
+### Story 9.7: Blacklist UX — Visible Gray-Out + Hidden-Only Filter
+
+As a user,
+I want blacklisted tracks to remain visible (grayed out) in track lists with an "Unhide" inverse action, AND a "Hidden only" filter toggle on the Playlist Detail page,
+So that the blacklist becomes a reviewable soft-flag instead of an opaque destructive delete.
+
+**FRs covered:** FR33 (amended), FR43 (promoted from Phase 2), FR49 (new — Hidden-only toggle)
+
+**Acceptance Criteria:**
+
+**Given** the backend track DTOs (`/api/v1/recently-added` and `/api/v1/playlists/{spotify_id}/tracks`),
+**When** they return a track,
+**Then** each track object includes `is_blacklisted: bool` computed by joining against the `track_blacklist` table (single `SELECT spotify_id FROM track_blacklist` per request, built into a `set[str]` and checked per track).
+
+**Given** a track has `is_blacklisted: true`,
+**When** rendered by `TrackRow`,
+**Then** the row stays visible at `opacity-50` on the title/artist/album/date columns (cover art slightly dimmed, hover state retained). The row is NOT removed from the DOM.
+
+**Given** a `TrackRow` overflow menu,
+**When** opened,
+**Then** the first menu item is "Hide from Recent Adds" (icon `EyeOff`) when `!track.isBlacklisted`, OR "Unhide" (icon `Eye`) when `track.isBlacklisted`. The hide branch calls `POST /api/v1/blacklist`; the unhide branch calls `DELETE /api/v1/blacklist/{spotify_id}`.
+
+**Given** the `useBlacklistTrack` and new `useUnblacklistTrack` hooks,
+**When** they fire,
+**Then** they mutate the matching track in `['recently-added']` and `['playlist-tracks', *]` caches **in place** (flip `is_blacklisted`), instead of filtering the track out. Rollback on error restores the previous flag.
+
+**Given** the Playlist Detail page hero actions row,
+**When** rendered,
+**Then** a "Hidden only" toggle button appears alongside the Story 9.5 search input (icon `EyeOff`, active state uses `var(--accent-color)`). When active, the displayed list is `filtered.filter(t => t.is_blacklisted)`. Composes with the search filter (logical AND).
+
+**Given** the backend test suite,
+**When** the dev runs `pytest tests/ -v`,
+**Then** ≥3 new tests in `tests/test_story_9_7.py` cover the blacklist join (true / false / both endpoints), and the total baseline stays ≥130.
+
+**Given** the Postman collection,
+**When** Story 9.7 ships,
+**Then** the response examples for `GET /recently-added` and `GET /playlists/{id}/tracks` include the new `is_blacklisted` field per [`feedback_postman_sync`](../../../home/kevinaubel/.claude/projects/-home-kevinaubel-PERSO-playlist-spotify/memory/feedback_postman_sync.md).
+
+**Given** the Story 8.5 sync filter and Story 9.6 virtualization,
+**When** Story 9.7 ships,
+**Then** neither is regressed: the sync filter still excludes blacklisted tracks from the dynamic playlist push, and the virtualized branch renders grayed rows identically to the non-virtualized branch.
+
+**Implementation hints:**
+- Backend: extend `RecentlyAddedTrack` Pydantic model with `is_blacklisted: bool = False`. In `services/spotify.get_recently_added_tracks()` and `services/spotify.get_playlist_tracks()`, accept an optional `blacklist_ids: set[str]` arg (router computes the set once and passes it down) and set the flag per track.
+- Frontend: extend `RecentlyAddedTrack` type (`frontend/src/types.ts`) and the `Track` adapter (`TrackListTable.tsx`). Add `isBlacklisted: boolean` to the `Track` type (`TrackRow.tsx`). Visual treatment via Tailwind `opacity-50` + `text-[var(--text-muted)]` conditional classes.
+- Hooks: `useBlacklistTrack` → mutate in place (`data.map(t => t.spotify_id === id ? { ...t, is_blacklisted: true } : t)`). New `useUnblacklistTrack` is the inverse (`is_blacklisted: false`).
+- Toggle: new `useState<boolean>(false)` in `PlaylistDetailPage` for `hiddenOnly`. Compose with the existing `filtered` array.
+- Scope: the "Hidden only" toggle is **NOT** added to `RecentlyAddedPage` in this story (out of scope). Can be added in a follow-up if requested.
+
+---
+
+### Story 9.8: Paginated Tracks API + Infinite Scroll
+
+As a user with large playlists (200+ tracks),
+I want the playlist detail page to load the first batch of tracks quickly and stream the rest as I scroll,
+So that I see content within ~500 ms instead of waiting for the whole playlist to be fetched from Spotify.
+
+**Acceptance criteria:**
+
+**Given** the backend endpoint `GET /api/v1/playlists/{spotify_id}/tracks`,
+**When** the client provides `?limit=50&offset=0`,
+**Then** the response returns at most `limit` tracks starting at `offset`, plus a `next_offset` field (null when the end is reached) and a `total` field.
+
+**Given** the same endpoint,
+**When** no `limit` is provided,
+**Then** the default is `limit=50` and `offset=0` (breaking change vs. Story 9.1 "full list returned to client" — accepted, see sprint-change-proposal-2026-05-26-playlist-tracks-pagination.md).
+
+**Given** the synthetic "Liked Songs" playlist (`spotify_id == "liked"`),
+**When** paginated requests are made,
+**Then** the same pagination semantics apply via `current_user_saved_tracks(limit, offset)`.
+
+**Given** the frontend hook `usePlaylistTracks`,
+**When** the playlist detail page mounts,
+**Then** the hook uses `useInfiniteQuery` (TanStack Query v5) with `initialPageParam: 0` and `getNextPageParam: (lastPage) => lastPage.next_offset`.
+
+**Given** `TrackListTable`,
+**When** the user scrolls within 300 px of the bottom of the list,
+**Then** an `IntersectionObserver` sentinel triggers `fetchNextPage()` if `hasNextPage && !isFetchingNextPage`.
+
+**Given** the Story 9.6 virtualizer,
+**When** a new page is appended to the flattened `tracks` array,
+**Then** the virtualizer's `count` updates automatically and rows render seamlessly (no re-mount, no scroll jump).
+
+**Given** the Story 9.5 filter input,
+**When** the user filters,
+**Then** the filter applies ONLY to currently-loaded pages (documented limitation — full-playlist search is out of scope for MVP).
+
+**Given** the backend test suite,
+**When** the dev runs `pytest tests/test_story_9_8.py -v`,
+**Then** ≥4 tests cover: nominal pagination, `offset > total`, `limit > 100` (clamped to 100), and Liked Songs pagination. Total baseline ≥134.
+
+**Given** the Postman collection,
+**When** Story 9.8 ships,
+**Then** the `GET /playlists/{id}/tracks` example reflects the new query params (`limit`, `offset`) and the paginated response shape (`{items, next_offset, total}`) per [`feedback_postman_sync`](../../../home/kevinaubel/.claude/projects/-home-kevinaubel-PERSO-playlist-spotify/memory/feedback_postman_sync.md).
+
+**Implementation hints:**
+- Backend: replace `get_playlist_tracks_full` with `get_playlist_tracks_page(spotify_id, limit, offset)`. Use spotipy's native `offset`/`limit` params on `playlist_items` and `current_user_saved_tracks` (no client-side aggregation across pages — one Spotify call per request). Return `{"items": [...], "next_offset": int | None, "total": int}`.
+- Clamp `limit` server-side to `[1, 100]` (Spotify's own cap). Reject `offset < 0` with HTTP 422.
+- Frontend: migrate `usePlaylistTracks` from `useQuery` to `useInfiniteQuery` keyed on `['playlist-tracks', spotifyId]`. Flatten in the consumer: `const tracks = data?.pages.flatMap(p => p.items) ?? []`.
+- Sentinel: 1 px `<div ref={sentinelRef} />` rendered after the virtualizer's spacer (and after the non-virtualized branch's mapped rows). `IntersectionObserver` with `rootMargin: '300px'` calls `fetchNextPage()`.
+- Loading state: when `isFetchingNextPage`, render a 3-row skeleton at the bottom of the list. Initial load (`isPending`) keeps the existing skeleton behavior unchanged.
+- `staleTime: 30_000` preserved on the infinite query.
+- Backward compat: Story 9.1's "full list" contract is intentionally broken. The only consumer is `usePlaylistTracks` itself, updated in the same PR. The blacklist join (Story 9.7) continues to work per-page (router computes `blacklist_ids` once per request, no change to the join logic).

@@ -153,6 +153,16 @@ A track auto-added from his "Workout" playlist isn't right for the unified queue
 
 ---
 
+### Journey 7 — Exploring a single playlist
+
+**Kevin wants to see exactly what's in his "Rock" playlist before deciding to include it in Recent Adds.**
+
+He clicks the Rock card on the Dashboard. The app navigates to `/playlists/<id>` — same hero+table layout he knows from Recently Added, this time showing all 56 Rock tracks with their date added. He filters by "Metallica" and the table narrows live. He spots a track that doesn't belong, clicks ⋯ → "Hide from Recent Adds" — the track is blacklisted globally and won't appear in his Recent Adds next sync.
+
+**Capabilities revealed:** click-to-detail navigation, reused track table pattern, per-track blacklist from any context.
+
+---
+
 ### Journey Requirements Summary
 
 | Capability | Journeys |
@@ -167,7 +177,8 @@ A track auto-added from his "Workout" playlist isn't right for the unified queue
 | Spotify-style grid with cover images | 5 |
 | Hide playlist (visual + sync exclusion) + hidden section | 5 |
 | Recently Added track-list page | 6 |
-| Per-track blacklist action | 6 |
+| Per-track blacklist action | 6, 7 |
+| Click-to-detail playlist navigation + filter within playlist | 7 |
 
 ## Web Application Requirements
 
@@ -195,6 +206,7 @@ The dashboard adopts a **Spotify Desktop-inspired visual language**:
 - **Layout:** Persistent left sidebar (logo, primary navigation: Dashboard / Recently Added / Settings / Logs); main content area with top header (page title, sync status badge, manual sync button); generous spacing.
 - **Playlist grid:** Square cards displaying the Spotify playlist cover image, playlist name, and track count. Hover reveals a play/details affordance and a ⋯ overflow menu (Include toggle, Hide). Active include state is communicated visually (border, badge, or accent ring).
 - **Recently Added page:** Track table with columns inspired by Spotify desktop — `#` index, Title (with track cover thumbnail + title/artist), Album, Date Added, Duration, and a ⋯ overflow menu per row (Hide / Blacklist). Row hover highlights; sticky header on scroll.
+- **Playlist detail page:** Same layout family as Recently Added (full-bleed hero with playlist cover + name + owner + track count + total duration; sticky-header track table with `#`, Title, Album, Date Added, Duration, ⋯). Includes a search/filter input in the actions row to narrow the visible tracks.
 - **Hidden playlists:** Collapsible accordion below the active grid, default-collapsed, labeled with count (e.g. "Hidden playlists (32)"); expanding shows the same card layout with a clear "Unhide" affordance per card.
 - **Typography & density:** Sans-serif system stack, tight track-list density on Recently Added, comfortable density on the playlist grid.
 - **Accessibility:** AA contrast on text vs background; focus rings visible on keyboard navigation; ⋯ menus reachable via keyboard.
@@ -256,10 +268,19 @@ The dashboard adopts a **Spotify Desktop-inspired visual language**:
 
 - **FR31:** User can navigate to a dedicated "Recently Added" page showing the current contents of the dynamic Spotify playlist
 - **FR32:** Tracks are displayed in a list view with columns: index, title + artist + cover thumbnail, album, date added, duration
-- **FR33:** Each row exposes an overflow menu with a "Hide / Blacklist" action
+- **FR33:** Each row exposes an overflow menu with a "Hide / Blacklist" action. Blacklisted tracks remain visible in track lists with a dimmed/grayed visual treatment and a reversible "Unhide" action (delivered by Story 9.7).
 - **FR34:** Blacklisting a track persistently excludes it from all future syncs
 - **FR35:** The next sync after a track is blacklisted removes that track from the dynamic Spotify playlist
 - **FR36:** Blacklist state is persisted across sessions
+
+### Playlist Detail Page
+
+- **FR44:** User can click a playlist card on the Dashboard to navigate to a dedicated playlist detail page
+- **FR45:** The playlist detail page displays all tracks in the playlist using the same hero + track table layout as Recently Added
+- **FR46:** Each track row on the playlist detail page exposes the same overflow menu as Recently Added: "Hide / Blacklist" and "Open in Spotify"
+- **FR47:** User can filter the displayed tracks within a playlist by title or artist (case-insensitive substring match)
+- **FR48:** User can navigate back to the Dashboard from the playlist detail page (browser back + visible back affordance)
+- **FR49:** On the Playlist Detail page, the user can toggle a "Hidden only" filter to display only blacklisted tracks. The filter composes with the search filter (FR47) using logical AND.
 
 ### Phase 2 Capabilities
 
@@ -269,7 +290,7 @@ The dashboard adopts a **Spotify Desktop-inspired visual language**:
 - **FR40:** User can view aggregated stats on the dynamic playlist (top artists, top genres)
 - **FR41:** User can configure notifications for sync completion or failure events
 - **FR42:** User can multi-select tracks on the Recently Added page for bulk blacklist
-- **FR43:** User can review and un-blacklist previously hidden tracks
+- **FR43:** ~~User can review and un-blacklist previously hidden tracks~~ — **PROMOTED to MVP** in Story 9.7 (grayed-row treatment + "Unhide" overflow action + "Hidden only" filter on Playlist Detail).
 
 ## Non-Functional Requirements
 
@@ -281,6 +302,7 @@ The dashboard adopts a **Spotify Desktop-inspired visual language**:
 - Sync engine processes up to 5,000 tracks within 30 seconds
 - Playlist grid renders within 1 second of API response for up to 100 playlists; cover images lazy-loaded
 - Recently Added track list renders within 1 second for up to 200 tracks
+- **NFR16:** Playlist detail page initial paint completes within 1.5 seconds for playlists up to 1,000 tracks; uses virtualization for the track table when track count exceeds 200
 
 ### Security
 

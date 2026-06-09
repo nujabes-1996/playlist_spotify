@@ -17,6 +17,7 @@ class RecentlyAddedTrack(BaseModel):
     duration_ms: int
     explicit: bool
     has_video: bool
+    is_blacklisted: bool
 
 
 @router.get("/recently-added", response_model=list[RecentlyAddedTrack])

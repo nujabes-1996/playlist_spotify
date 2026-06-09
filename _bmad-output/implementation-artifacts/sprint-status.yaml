@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-06
-last_updated: 2026-05-21  # Story 8.6 → review
+last_updated: 2026-05-26  # Story 9.8 dev-story complete
 project: playlist_spotify
 
 project_key: NOKEY
@@ -107,3 +107,15 @@ development_status:
   8-5-sync-integration-blacklist-filter: review
   8-6-recently-added-performance-polish: review
   epic-8-retrospective: optional
+
+  # Epic 9: Playlist Detail Page
+  epic-9: in-progress
+  9-1-playlist-tracks-api: review
+  9-2-shared-track-list-components: review
+  9-3-playlist-detail-page-navigation: review
+  9-4-per-track-actions-playlist-detail: review
+  9-5-filter-tracks-within-playlist: review
+  9-6-virtualization-large-playlists: review
+  9-7-blacklist-ux-gray-out-hidden-only-filter: review  # dev-story complete 2026-05-26
+  9-8-paginated-tracks-infinite-scroll: review  # dev-story complete 2026-05-26
+  epic-9-retrospective: optional

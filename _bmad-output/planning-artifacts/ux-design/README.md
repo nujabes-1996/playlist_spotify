@@ -157,11 +157,13 @@ Same 6-column grid as the header. Padding 8px 16px, border-radius 4px (subtle on
 - **Column 4 (date added)**: relative string ("3 days ago"). Wrap in shadcn `Tooltip` showing the absolute date ("May 18, 2026") on hover.
 - **Column 5 (duration)**: tabular-nums, right-aligned, 13.5px.
 - **Column 6 (overflow)**: 32×32 circle button, MoreHorizontal icon, opacity 0 → 1 on row hover. Shadcn `DropdownMenu` with:
-  - "Hide from Recent Adds" (EyeOff icon)
-  - "Open in Spotify" (ExternalLink icon)
+  - **When `!track.isBlacklisted`**: "Hide from Recent Adds" (`EyeOff` icon)
+  - **When `track.isBlacklisted`**: "Unhide" (`Eye` icon) — fires `DELETE /api/v1/blacklist/{spotify_id}` (Story 9.7).
+  - "Open in Spotify" (`ExternalLink` icon)
 
 - **Row hover**: background `var(--bg-row-hover)` = `#1a1a1a`.
 - **Row "active"** (currently-playing visual state — purely cosmetic in this app): background `var(--bg-row-active)` = `#2a2a2a`, title color becomes accent.
+- **Row "blacklisted"** (Story 9.7 — `track.isBlacklisted === true`): `opacity-50` applied on the title / artist / album / date columns; cover art opacity unchanged so the user can still visually recognize the track. Row hover state still works (background fades in). The grayed visual signals "this track is hidden and will be removed from the dynamic playlist on the next sync" — but stays in the list so the user can review or restore it via the dropdown "Unhide" item.
 
 ### 4 · Settings route (`/settings`)
 
@@ -199,6 +201,39 @@ Real-time event stream from the harvester, newest at top.
   - **Expanded detail** (when open): full-width row, padding `14px 18px 18px 60px`, background `var(--bg-app)`, border-bottom 1px var(--border-soft), `font-family: var(--font-mono)`, 12px, secondary color, `white-space: pre-wrap`. Lines starting with "ERR" render in danger color.
   - Error rows are expanded by default.
   - Row hover: background `var(--bg-row-hover)`.
+
+### 6 · Playlist Detail route (`/playlists/:spotifyId`)
+
+Same hero + table family as Recently Added. Reuses the shared `TrackListHero` and `TrackListTable` components (extracted in Epic 9 Story 9.2).
+
+**Hero differences vs Recently Added:**
+
+- **Kicker:** `PLAYLIST` (au lieu de `AUTO-SYNCED PLAYLIST`).
+- **Title:** playlist name (from `GET /api/v1/playlists`).
+- **Sub-line:** `<strong>{owner}</strong> • {n} tracks • about Xh Ym` (no "updated from K source playlists" — c'est une vraie playlist, pas l'agrégée).
+- **Cover:** Spotify playlist cover image (mosaïque 2×2 ou cover dédiée, fournie par l'API Spotify). Fallback : gradient accent + initiales si pas d'image (cas Titres likés).
+- **Background gradient:** identique à Recently Added (`linear-gradient(180deg, color-mix(in oklab, var(--accent-color) 40%, #1a1a1a) 0%, var(--bg-elevated) 100%)`).
+
+**Hero actions row:**
+
+- Primary button: `Open in Spotify` (`ExternalLink` icon, rounded-full, accent) — promu en primary car cette page n'a pas de "Sync now" (la sync est globale, pas par playlist).
+- Search input (rounded-full, w 240px, height 36px, bg `var(--bg-elevated-2)`, `Search` icon prefix, placeholder "Filter tracks…") — filtre live sur title + artists, case-insensitive substring.
+- **"Hidden only" toggle** (Story 9.7, FR49): 36×36 icon-only button (`EyeOff` icon), placed entre l'input de recherche et le `MoreHorizontal`. État inactif : couleur `var(--text-secondary)`, hover `bg-white/5`. État actif (toggled ON) : background `var(--accent-soft)`, icon color `var(--accent-color)`, l'icône `EyeOff` reste affichée (signal visuel "filter is on"). Quand actif, la table n'affiche que `filtered.filter(t => t.is_blacklisted)`. Compose en AND avec la recherche : la barre de recherche + le toggle peuvent être actifs simultanément. Tooltip au survol : "Show hidden only" (inactif) / "Show all tracks" (actif).
+- 36×36 icon-only `MoreHorizontal` button (futur usage : edit playlist / sort options).
+
+**Track table:**
+
+- Identique pixel-perfect au TrackRow de Recently Added (snippets/TrackRow.tsx).
+- Overflow menu par ligne :
+  - `Hide from Recent Adds` (= blacklist global) **OU** `Unhide` selon l'état `track.isBlacklisted` (Story 9.7).
+  - `Open in Spotify`.
+- Tracks blacklistées : rendues grisées (`opacity-50` sur les colonnes de texte) au lieu d'être retirées de la liste (Story 9.7).
+- Virtualisation activée automatiquement si `tracks.length > 200` (transparent pour l'utilisateur — sticky header conservé).
+
+**Navigation :**
+
+- Entrée : clic sur une carte playlist du Dashboard (Epic 9 Story 9.3 active le `onClick`).
+- Retour : bouton `ChevronLeft` du topbar (devient actif quand `history.length > 1` — précédemment désactivé en MVP cf. §1).
 
 ## Interactions & Behavior
 

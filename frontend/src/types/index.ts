@@ -58,4 +58,11 @@ export interface RecentlyAddedTrack {
   duration_ms: number
   explicit: boolean
   has_video: boolean
+  is_blacklisted: boolean
+}
+
+export interface PlaylistTracksPage {
+  items: RecentlyAddedTrack[]
+  next_offset: number | null
+  total: number
 }

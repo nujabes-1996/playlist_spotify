@@ -1,6 +1,6 @@
 // frontend/src/components/TrackRow.tsx
 import { memo } from "react";
-import { MoreHorizontal, Play, ExternalLink, EyeOff } from "lucide-react";
+import { MoreHorizontal, ExternalLink, EyeOff, Eye } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -20,6 +20,7 @@ export interface Track {
   hasVideo?: boolean;
   isNew?: boolean;
   isActive?: boolean;       // currently-playing visual (cosmetic)
+  isBlacklisted?: boolean;  // grayed-out (soft-flagged) — story 9.7
 }
 
 export const trackCols =
@@ -48,10 +49,11 @@ interface TrackRowProps {
   track: Track;
   index: number;
   onHide?: (id: string) => void;
+  onUnhide?: (id: string) => void;
   onOpenInSpotify?: (id: string) => void;
 }
 
-function TrackRowInner({ track, index, onHide, onOpenInSpotify }: TrackRowProps) {
+function TrackRowInner({ track, index, onHide, onUnhide, onOpenInSpotify }: TrackRowProps) {
   return (
     <div
       tabIndex={0}
@@ -66,14 +68,8 @@ function TrackRowInner({ track, index, onHide, onOpenInSpotify }: TrackRowProps)
           : "hover:bg-[var(--bg-row-hover)]",
       )}
     >
-      {/* index ↔ play */}
       <div className="relative grid place-items-center text-[var(--text-muted)]">
-        <span className="group-hover:hidden">{index + 1}</span>
-        <Play
-          size={12}
-          fill="currentColor"
-          className="hidden text-white group-hover:block"
-        />
+        <span>{index + 1}</span>
       </div>
 
       {/* title + artist */}
@@ -96,6 +92,7 @@ function TrackRowInner({ track, index, onHide, onOpenInSpotify }: TrackRowProps)
             className={cn(
               "truncate text-[14.5px] font-medium",
               track.isActive ? "text-[var(--accent-color)]" : "text-white",
+              track.isBlacklisted && "opacity-60",
             )}
           >
             {track.title}
@@ -106,7 +103,10 @@ function TrackRowInner({ track, index, onHide, onOpenInSpotify }: TrackRowProps)
               </span>
             )}
           </div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-[var(--text-muted)]">
+          <div className={cn(
+            "mt-0.5 flex items-center gap-1.5 text-[12.5px] text-[var(--text-muted)]",
+            track.isBlacklisted && "opacity-60",
+          )}>
             {track.explicit && (
               <span className="rounded-sm bg-[#535353] px-1 py-px text-[8px] font-bold tracking-wider text-[#d4d4d4]">
                 E
@@ -118,9 +118,12 @@ function TrackRowInner({ track, index, onHide, onOpenInSpotify }: TrackRowProps)
         </div>
       </div>
 
-      <div className="hidden truncate text-[13.5px] sm:block">{track.album}</div>
+      <div className={cn(
+        "hidden truncate text-[13.5px] sm:block",
+        track.isBlacklisted && "opacity-60",
+      )}>{track.album}</div>
 
-      <div className="hidden sm:block">
+      <div className={cn("hidden sm:block", track.isBlacklisted && "opacity-60")}>
         <Tooltip>
           <TooltipTrigger asChild>
             <div className="truncate text-[13.5px]">{track.addedAgo}</div>
@@ -129,7 +132,10 @@ function TrackRowInner({ track, index, onHide, onOpenInSpotify }: TrackRowProps)
         </Tooltip>
       </div>
 
-      <div className="text-right text-[13.5px] tabular-nums">{track.durationLabel}</div>
+      <div className={cn(
+        "text-right text-[13.5px] tabular-nums",
+        track.isBlacklisted && "opacity-60",
+      )}>{track.durationLabel}</div>
 
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -142,9 +148,15 @@ function TrackRowInner({ track, index, onHide, onOpenInSpotify }: TrackRowProps)
           <MoreHorizontal size={14} />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => onHide?.(track.id)}>
-            <EyeOff size={15} className="mr-2" />Hide from Recent Adds
-          </DropdownMenuItem>
+          {track.isBlacklisted ? (
+            <DropdownMenuItem onClick={() => onUnhide?.(track.id)}>
+              <Eye size={15} className="mr-2" />Unhide
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem onClick={() => onHide?.(track.id)}>
+              <EyeOff size={15} className="mr-2" />Hide from Recent Adds
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={() => onOpenInSpotify?.(track.id)}>
             <ExternalLink size={15} className="mr-2" />Open in Spotify
           </DropdownMenuItem>

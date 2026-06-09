@@ -1,7 +1,8 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+from spotipy import SpotifyException
 from sqlmodel import select
 
 from dependencies import SessionDep
@@ -23,6 +24,19 @@ class PlaylistRead(BaseModel):
 class PlaylistPatch(BaseModel):
     is_included: Optional[bool] = None
     is_hidden: Optional[bool] = None
+
+
+class PlaylistTrack(BaseModel):
+    spotify_id: str
+    title: str
+    artists: list[str]
+    album: str
+    image_url: Optional[str] = None
+    added_at: str
+    duration_ms: int
+    explicit: bool
+    has_video: bool
+    is_blacklisted: bool
 
 
 @router.get("/playlists", response_model=list[PlaylistRead])
@@ -71,6 +85,29 @@ def get_playlists(session: SessionDep) -> list[PlaylistRead]:
             )
         )
     return result
+
+
+class PlaylistTracksPage(BaseModel):
+    items: list[PlaylistTrack]
+    next_offset: Optional[int]
+    total: int
+
+
+@router.get("/playlists/{spotify_id}/tracks", response_model=PlaylistTracksPage)
+def get_playlist_tracks(
+    spotify_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> PlaylistTracksPage:
+    try:
+        page = spotify_service.get_playlist_tracks_page(spotify_id, limit, offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    except SpotifyException as exc:
+        if exc.http_status == 404:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        raise HTTPException(status_code=502, detail=f"Spotify error: {exc.msg}")
+    return PlaylistTracksPage(**page)
 
 
 @router.patch("/playlists/{spotify_id}", response_model=PlaylistRead)

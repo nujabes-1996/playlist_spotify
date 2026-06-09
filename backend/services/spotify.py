@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 
 from database import engine
 from models.config import Config
+from services import blacklist_service
 from services.token_manager import SQLiteCacheHandler
 
 SCOPES = "playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private user-read-private user-library-read"
@@ -281,6 +282,143 @@ def get_playlist_tracks(playlist_id: str, sp: Spotify = None, since: str | None 
     return results
 
 
+def _build_track_row(track: dict, added_at: str, blacklisted_ids: set[str]) -> dict:
+    album = track.get("album") or {}
+    images = album.get("images") or []
+    artists = [a.get("name") for a in (track.get("artists") or []) if a.get("name")]
+    return {
+        "spotify_id": track["id"],
+        "title": track.get("name", ""),
+        "artists": artists,
+        "album": album.get("name", ""),
+        "image_url": images[0]["url"] if images else None,
+        "added_at": added_at or "",
+        "duration_ms": int(track.get("duration_ms") or 0),
+        "explicit": bool(track.get("explicit", False)),
+        "has_video": bool(track.get("is_video", False)),
+        "is_blacklisted": track["id"] in blacklisted_ids,
+    }
+
+
+def get_playlist_tracks_full(playlist_id: str) -> list[dict]:
+    """Return every track of a playlist (or Liked Songs) as full rich-shape dicts.
+
+    Mirrors get_recently_added_tracks shape. For LIKED_SONGS_ID, uses the
+    saved-tracks API. Re-raises SpotifyException on 404 (router translates to
+    HTTP 404) and on other Spotify errors (router → 502).
+    """
+    sp = get_authenticated_client()
+    with Session(engine) as session:
+        blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
+    results: list[dict] = []
+    offset = 0
+
+    if playlist_id == LIKED_SONGS_ID:
+        limit = 50
+        while True:
+            page = sp.current_user_saved_tracks(limit=limit, offset=offset)
+            for item in page["items"]:
+                if item is None:
+                    continue
+                track = item.get("track")
+                if not track or not track.get("id") or track.get("is_local"):
+                    continue
+                results.append(_build_track_row(track, item.get("added_at") or "", blacklisted_ids))
+            if page.get("next") is None:
+                break
+            offset += limit
+        return results
+
+    # Existence probe — let SpotifyException propagate (router handles 404 vs 502)
+    sp.playlist(playlist_id, fields="id")
+
+    limit = 100
+    while True:
+        page = sp.playlist_items(
+            playlist_id,
+            limit=limit,
+            offset=offset,
+            fields=(
+                "items(added_at,is_local,"
+                "track(id,name,duration_ms,explicit,is_local,is_video,"
+                "artists(name),album(name,images)),"
+                "item(id,name,duration_ms,explicit,is_local,is_video,"
+                "artists(name),album(name,images))),next"
+            ),
+        )
+        for item in page["items"]:
+            if item is None or item.get("is_local"):
+                continue
+            track = item.get("track") or item.get("item")
+            if not track or not track.get("id") or track.get("is_local"):
+                continue
+            results.append(_build_track_row(track, item.get("added_at") or "", blacklisted_ids))
+        if page.get("next") is None:
+            break
+        offset += limit
+    return results
+
+
+def get_playlist_tracks_page(
+    playlist_id: str, limit: int, offset: int
+) -> dict:
+    """Return a single page of tracks plus pagination metadata.
+
+    next_offset advances by raw page length (Spotify's notion of progress), not
+    by kept length (post-filter). Returns next_offset=None when end reached.
+    """
+    sp = get_authenticated_client()
+    with Session(engine) as session:
+        blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
+
+    items: list[dict] = []
+
+    if playlist_id == LIKED_SONGS_ID:
+        page = sp.current_user_saved_tracks(limit=limit, offset=offset)
+        total = int(page.get("total") or 0)
+        raw = page.get("items") or []
+        for item in raw:
+            if item is None:
+                continue
+            track = item.get("track")
+            if not track or not track.get("id") or track.get("is_local"):
+                continue
+            items.append(
+                _build_track_row(track, item.get("added_at") or "", blacklisted_ids)
+            )
+        next_offset = offset + len(raw) if (offset + len(raw)) < total else None
+        return {"items": items, "next_offset": next_offset, "total": total}
+
+    # Existence probe — let SpotifyException propagate (router handles 404 vs 502)
+    sp.playlist(playlist_id, fields="tracks(total)")
+
+    page = sp.playlist_items(
+        playlist_id,
+        limit=limit,
+        offset=offset,
+        fields=(
+            "total,items(added_at,is_local,"
+            "track(id,name,duration_ms,explicit,is_local,is_video,"
+            "artists(name),album(name,images)),"
+            "item(id,name,duration_ms,explicit,is_local,is_video,"
+            "artists(name),album(name,images))),next"
+        ),
+    )
+    total = int(page.get("total") or 0)
+    raw = page.get("items") or []
+    for item in raw:
+        if item is None or item.get("is_local"):
+            continue
+        track = item.get("track") or item.get("item")
+        if not track or not track.get("id") or track.get("is_local"):
+            continue
+        items.append(
+            _build_track_row(track, item.get("added_at") or "", blacklisted_ids)
+        )
+    next_offset = offset + len(raw) if (offset + len(raw)) < total else None
+    return {"items": items, "next_offset": next_offset, "total": total}
+
+
 def get_recently_added_tracks() -> list[dict]:
     """Return the current contents of the dynamic playlist as shaped dicts.
 
@@ -291,6 +429,7 @@ def get_recently_added_tracks() -> list[dict]:
     with Session(engine) as session:
         config = session.exec(select(Config)).first()
         playlist_id = config.dynamic_playlist_id if config else None
+        blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
     if not playlist_id:
         return []
 
@@ -338,6 +477,7 @@ def get_recently_added_tracks() -> list[dict]:
                 "explicit": bool(track.get("explicit", False)),
                 # Spotify rarely flags `is_video` on normal tracks; default False.
                 "has_video": bool(track.get("is_video", False)),
+                "is_blacklisted": track["id"] in blacklisted_ids,
             })
         if page.get("next") is None:
             break

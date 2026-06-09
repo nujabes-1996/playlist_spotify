@@ -61,6 +61,7 @@ def test_returns_tracks_with_exact_shape(client):
             "duration_ms": 240000,
             "explicit": True,
             "has_video": False,
+            "is_blacklisted": False,
         }
     ]
     with patch(
@@ -82,6 +83,7 @@ def test_returns_tracks_with_exact_shape(client):
         "duration_ms",
         "explicit",
         "has_video",
+        "is_blacklisted",
     }
     assert set(track.keys()) == expected_keys
     assert track["spotify_id"] == "track-1"

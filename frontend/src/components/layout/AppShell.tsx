@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   Clock,
@@ -166,6 +166,8 @@ function SidebarContents({
 export default function AppShell() {
   const { pathname } = useLocation()
   const showSearch = pathname === '/'
+  const navigate = useNavigate()
+  const canGoBack = typeof window !== 'undefined' && window.history.length > 1
   const auth = useAuthStatus()
   const sync = useSyncStatus()
   const { startStream, isStreaming } = useSyncStream()
@@ -258,9 +260,16 @@ export default function AppShell() {
             </Sheet>
 
             <button
-              disabled
+              type="button"
+              disabled={!canGoBack}
+              onClick={() => navigate(-1)}
               aria-label="Back"
-              className="hidden md:grid h-8 w-8 place-items-center rounded-full bg-black/55 text-[var(--text-muted)]"
+              className={cn(
+                'hidden md:grid h-8 w-8 place-items-center rounded-full bg-black/55 transition',
+                canGoBack
+                  ? 'text-white hover:bg-black/80'
+                  : 'text-[var(--text-muted)] cursor-not-allowed',
+              )}
             >
               <ChevronLeft size={16} />
             </button>
@@ -323,6 +332,7 @@ export default function AppShell() {
 
           {/* scroll region */}
           <div
+            id="main-scroll"
             className="flex-1 overflow-y-auto overflow-x-hidden"
             onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 4)}
           >
