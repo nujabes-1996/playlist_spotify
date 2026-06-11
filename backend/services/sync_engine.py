@@ -5,9 +5,9 @@ import services.spotify as spotify_service
 from sqlmodel import Session, select
 
 from database import engine
-from models.config import Config
 from models.playlist import Playlist
 from models.sync_log import SyncLog
+from models.user import User
 
 
 def harvest_tracks(included_playlists: list, sp, since: str | None = None) -> list[dict]:
@@ -41,10 +41,12 @@ def _write_sync_log(
     new_track_count: int | None,
     error_message: str | None,
     timestamp: str,
+    user_id: int | None = None,
 ) -> None:
     with Session(engine) as session:
         session.add(
             SyncLog(
+                user_id=user_id,
                 status=status,
                 track_count=track_count,
                 new_track_count=new_track_count,
@@ -55,9 +57,13 @@ def _write_sync_log(
         session.commit()
 
 
-def run_sync() -> dict:
+def run_sync(user_id: int) -> dict:
     """
-    Full sync pipeline: harvest → dedup → sort → slice → push → log.
+    Full sync pipeline for one user: harvest → dedup → sort → slice → push → log.
+
+    Each user's scheduled job (and the manual POST /sync/run) calls this with that
+    user's id; the User row is re-loaded by id here (the background job has no request
+    session). Returns a skip dict if the user no longer exists.
 
     On first run (no last_sync_at): full fetch from all selected playlists.
     On subsequent runs: fetches only tracks added since last_sync_at, merges
@@ -65,20 +71,28 @@ def run_sync() -> dict:
     """
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    with Session(engine) as session:
+        user = session.get(User, user_id)
+    if user is None:
+        return {"status": "skipped", "reason": "user not found"}
+
     try:
         with Session(engine) as session:
             playlists = session.exec(
-                select(Playlist).where(Playlist.is_included == True, Playlist.is_hidden == False)  # noqa: E712
+                select(Playlist).where(
+                    Playlist.user_id == user.id,
+                    Playlist.is_included == True,  # noqa: E712
+                    Playlist.is_hidden == False,  # noqa: E712
+                )
             ).all()
             if not playlists:
                 raise ValueError("No playlists selected")
-            config = session.exec(select(Config)).first()
-            playlist_size = config.playlist_size if config else 50
-            last_sync_at = config.last_sync_at if config else None
-            blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
+            playlist_size = user.playlist_size
+            last_sync_at = user.last_sync_at
+            blacklisted_ids = blacklist_service.get_blacklisted_ids(session, user.id)
 
-        sp = spotify_service.get_authenticated_client()
-        target_id = spotify_service.get_or_create_dynamic_playlist(sp)
+        sp = spotify_service.get_authenticated_client(user)
+        target_id = spotify_service.get_or_create_dynamic_playlist(sp, user)
         existing_tracks = spotify_service.get_playlist_tracks(target_id, sp)
         existing_ids = {t["spotify_id"] for t in existing_tracks}
 
@@ -104,10 +118,10 @@ def run_sync() -> dict:
         spotify_service.replace_playlist_tracks(target_id, track_uris, sp)
 
         with Session(engine) as session:
-            config = session.exec(select(Config)).first()
-            if config:
-                config.last_sync_at = timestamp
-                session.add(config)
+            db_user = session.get(User, user.id)
+            if db_user:
+                db_user.last_sync_at = timestamp
+                session.add(db_user)
                 session.commit()
 
         _write_sync_log(
@@ -116,6 +130,7 @@ def run_sync() -> dict:
             new_track_count=new_track_count,
             error_message=None,
             timestamp=timestamp,
+            user_id=user.id,
         )
         return {"status": "success", "track_count": len(sliced), "new_track_count": new_track_count}
 
@@ -126,5 +141,6 @@ def run_sync() -> dict:
             new_track_count=None,
             error_message=str(exc),
             timestamp=timestamp,
+            user_id=user.id,
         )
         raise

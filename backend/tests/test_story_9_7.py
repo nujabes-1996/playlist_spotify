@@ -4,6 +4,10 @@ Covers AC #5: get_recently_added_tracks and get_playlist_tracks_full both
 set is_blacklisted correctly per track, including the Liked Songs branch
 and the empty-blacklist case. Plus an API-contract test ensuring the JSON
 response shape carries the new field.
+
+Story 10.3: blacklist is scoped per user and the dynamic playlist id lives on
+User.target_playlist_id, so service calls pass a user (id=1) and seeded blacklist
+rows carry user_id=1.
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -13,7 +17,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
-from models.config import Config
+from dependencies import get_current_user
+from models.user import User
 from models.track_blacklist import TrackBlacklist
 
 
@@ -38,6 +43,7 @@ def client_fixture(session: Session):
         return session
 
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -58,16 +64,14 @@ def _make_track(track_id, **overrides):
     return {"added_at": "2026-05-20T10:00:00Z", "is_local": False, "track": track}
 
 
-def _seed_config(engine, dynamic_playlist_id="dyn-1"):
-    with Session(engine) as s:
-        s.add(Config(client_id="cid", client_secret="csec", dynamic_playlist_id=dynamic_playlist_id))
-        s.commit()
+def _user(dynamic_playlist_id="dyn-1"):
+    return User(id=1, spotify_user_id="svc_user", target_playlist_id=dynamic_playlist_id)
 
 
 def _seed_blacklist(engine, *spotify_ids):
     with Session(engine) as s:
         for sid in spotify_ids:
-            s.add(TrackBlacklist(spotify_id=sid, blacklisted_at="2026-05-20T00:00:00Z"))
+            s.add(TrackBlacklist(spotify_id=sid, user_id=1, blacklisted_at="2026-05-20T00:00:00Z"))
         s.commit()
 
 
@@ -78,7 +82,6 @@ def _seed_blacklist(engine, *spotify_ids):
 def test_recently_added_sets_is_blacklisted_per_track(engine):
     from services import spotify as svc
 
-    _seed_config(engine)
     _seed_blacklist(engine, "t1")
 
     mock_sp = MagicMock()
@@ -91,7 +94,7 @@ def test_recently_added_sets_is_blacklisted_per_track(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(_user())
 
     flags = {t["spotify_id"]: t["is_blacklisted"] for t in result}
     assert flags == {"t1": True, "t2": False, "t3": False}
@@ -116,7 +119,7 @@ def test_playlist_tracks_full_sets_is_blacklisted_per_track(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_playlist_tracks_full("pl-1")
+        result = svc.get_playlist_tracks_full("pl-1", _user())
 
     flags = {t["spotify_id"]: t["is_blacklisted"] for t in result}
     assert flags == {"t1": False, "t2": True, "t3": False}
@@ -167,7 +170,7 @@ def test_playlist_tracks_full_liked_songs_sets_is_blacklisted(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_playlist_tracks_full("liked_songs")
+        result = svc.get_playlist_tracks_full("liked_songs", _user())
 
     flags = {t["spotify_id"]: t["is_blacklisted"] for t in result}
     assert flags == {"lk1": False, "lk2": True}
@@ -180,8 +183,6 @@ def test_playlist_tracks_full_liked_songs_sets_is_blacklisted(engine):
 def test_empty_blacklist_means_every_track_false(engine):
     from services import spotify as svc
 
-    _seed_config(engine)
-
     mock_sp = MagicMock()
     mock_sp.playlist.return_value = {"id": "dyn-1"}
     mock_sp.playlist_items.return_value = {
@@ -192,7 +193,7 @@ def test_empty_blacklist_means_every_track_false(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(_user())
 
     assert all(t["is_blacklisted"] is False for t in result)
 

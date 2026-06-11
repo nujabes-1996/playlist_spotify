@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Search,
   Menu,
+  LogOut,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,10 +26,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { useAuthStatus } from '@/hooks/useAuthStatus'
+import { useAuthStatus, useLogout } from '@/hooks/useAuthStatus'
 import { useSyncStatus } from '@/hooks/useSyncStatus'
 import { useSyncStream } from '@/hooks/useSyncStream'
 import { formatRelative } from '@/lib/relativeTime'
+import LoginScreen from '@/features/auth/LoginScreen'
 
 const NAV = [
   { to: '/', label: 'Dashboard', Icon: LayoutDashboard, end: true },
@@ -49,6 +51,8 @@ type SidebarContentsProps = {
   authResolved: boolean
   authOk: boolean
   onNavigate?: () => void
+  onLogout?: () => void
+  loggingOut?: boolean
 }
 
 function SidebarContents({
@@ -58,6 +62,8 @@ function SidebarContents({
   authResolved,
   authOk,
   onNavigate,
+  onLogout,
+  loggingOut,
 }: SidebarContentsProps) {
   return (
     <>
@@ -140,7 +146,7 @@ function SidebarContents({
           {initials}
         </div>
         {!collapsed && (
-          <div className="min-w-0 leading-tight">
+          <div className="min-w-0 flex-1 leading-tight">
             <div className="text-[12px] font-semibold text-white">Connected as</div>
             <div className="truncate text-[13px] font-bold text-white">{connectedAs}</div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[11px]">
@@ -158,6 +164,34 @@ function SidebarContents({
             </div>
           </div>
         )}
+        {onLogout &&
+          (collapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  disabled={loggingOut}
+                  aria-label="Log out"
+                  className="grid h-8 w-8 place-items-center rounded-full text-[var(--text-secondary)] transition hover:bg-[var(--bg-hover)] hover:text-white disabled:opacity-50"
+                >
+                  <LogOut size={15} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Log out</TooltipContent>
+            </Tooltip>
+          ) : (
+            <button
+              type="button"
+              onClick={onLogout}
+              disabled={loggingOut}
+              aria-label="Log out"
+              title="Log out"
+              className="ml-auto grid h-8 w-8 flex-shrink-0 place-items-center rounded-full text-[var(--text-secondary)] transition hover:bg-[var(--bg-hover)] hover:text-white disabled:opacity-50"
+            >
+              <LogOut size={15} />
+            </button>
+          ))}
       </div>
     </>
   )
@@ -169,6 +203,7 @@ export default function AppShell() {
   const navigate = useNavigate()
   const canGoBack = typeof window !== 'undefined' && window.history.length > 1
   const auth = useAuthStatus()
+  const logout = useLogout()
   const sync = useSyncStatus()
   const { startStream, isStreaming } = useSyncStream()
   const [scrolled, setScrolled] = useState(false)
@@ -176,12 +211,11 @@ export default function AppShell() {
 
   const authResolved = !auth.isPending && !auth.isError
   const authOk = auth.data?.authenticated === true
-  const connectedAs =
-    auth.data?.spotify_user_id ??
-    (auth.isPending ? 'Connecting…' : 'Not connected')
-  const initials = authResolved && auth.data?.spotify_user_id
-    ? computeInitials(auth.data.spotify_user_id)
-    : '?'
+  const displayName = auth.data?.display_name ?? auth.data?.spotify_user_id ?? null
+  const connectedAs = displayName ?? (auth.isPending ? 'Connecting…' : 'Not connected')
+  const initials = authResolved && displayName ? computeInitials(displayName) : '?'
+
+  const handleLogout = () => logout.mutate()
 
   const lastSyncRelative = sync.data ? formatRelative(sync.data.timestamp) : null
   const syncFailed = sync.data?.status === 'failure'
@@ -192,6 +226,24 @@ export default function AppShell() {
       : syncFailed
         ? `Last sync failed · ${lastSyncRelative}`
         : `Last sync · ${lastSyncRelative}`
+
+  // Story 10.2 auth gate: an unauthenticated visitor sees the login screen instead
+  // of the whole shell (sidebar + routes). All hooks above run unconditionally first.
+  if (auth.isPending) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-[var(--bg-base)] text-sm text-[var(--text-secondary)]">
+        Loading…
+      </div>
+    )
+  }
+  if (!authOk) {
+    return (
+      <LoginScreen
+        hasPreviousAuth={auth.data?.has_previous_auth}
+        redirectUri={auth.data?.redirect_uri}
+      />
+    )
+  }
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -204,6 +256,8 @@ export default function AppShell() {
             initials={initials}
             authResolved={authResolved}
             authOk={authOk}
+            onLogout={handleLogout}
+            loggingOut={logout.isPending}
           />
         </aside>
         {/* Tablet icon rail (md..lg) */}
@@ -214,6 +268,8 @@ export default function AppShell() {
             initials={initials}
             authResolved={authResolved}
             authOk={authOk}
+            onLogout={handleLogout}
+            loggingOut={logout.isPending}
           />
         </aside>
 
@@ -255,6 +311,8 @@ export default function AppShell() {
                   authResolved={authResolved}
                   authOk={authOk}
                   onNavigate={() => setMobileOpen(false)}
+                  onLogout={handleLogout}
+                  loggingOut={logout.isPending}
                 />
               </SheetContent>
             </Sheet>

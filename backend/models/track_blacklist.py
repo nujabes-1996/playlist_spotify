@@ -5,4 +5,5 @@ class TrackBlacklist(SQLModel, table=True):
     __tablename__ = "track_blacklist"  # type: ignore[assignment]
 
     spotify_id: str = Field(primary_key=True)
+    user_id: int = Field(foreign_key="user.id", primary_key=True, index=True)
     blacklisted_at: str

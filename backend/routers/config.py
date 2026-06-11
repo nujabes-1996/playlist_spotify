@@ -3,11 +3,9 @@ from typing import Optional
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlmodel import select
 
-from dependencies import SessionDep
-from models.config import Config
-from scheduler import bootstrap_scheduler
+from dependencies import CurrentUserDep, SessionDep
+from scheduler import bootstrap_user_job
 
 router = APIRouter(tags=["config"])
 
@@ -28,23 +26,15 @@ class ConfigRead(BaseModel):
     dynamic_playlist_id: Optional[str] = None
 
 
-class ConfigWrite(BaseModel):
-    client_id: str
-    client_secret: str
-    playlist_size: Optional[int] = 50
-    cron_expr: Optional[str] = None
-
-
 @router.get("/config", response_model=ConfigRead)
-def get_config(session: SessionDep) -> ConfigRead:
-    config = session.exec(select(Config)).first()
-    if config is None or not config.client_id:
-        return ConfigRead(setup_required=True, playlist_size=50, cron_expr=None, dynamic_playlist_id=None)
+def get_config(current_user: CurrentUserDep) -> ConfigRead:
+    # A session user always has credentials (login persists them), so setup is never
+    # required for a gated request. Settings live on the user's own row.
     return ConfigRead(
-        setup_required=False,
-        playlist_size=config.playlist_size,
-        cron_expr=config.cron_expr,
-        dynamic_playlist_id=config.dynamic_playlist_id,
+        setup_required=not bool(current_user.client_id),
+        playlist_size=current_user.playlist_size,
+        cron_expr=current_user.cron_expr,
+        dynamic_playlist_id=current_user.target_playlist_id,
     )
 
 
@@ -54,45 +44,24 @@ class ConfigPatch(BaseModel):
 
 
 @router.patch("/config", response_model=ConfigRead)
-def patch_config(payload: ConfigPatch, session: SessionDep) -> ConfigRead:
-    config = session.exec(select(Config)).first()
-    if config is None:
-        raise HTTPException(status_code=400, detail="Setup required before updating config")
+def patch_config(
+    payload: ConfigPatch, session: SessionDep, current_user: CurrentUserDep
+) -> ConfigRead:
     cron_changed = "cron_expr" in payload.model_fields_set
     if payload.playlist_size is not None:
-        config.playlist_size = payload.playlist_size
+        current_user.playlist_size = payload.playlist_size
     if cron_changed:
         _validate_cron(payload.cron_expr)
-        config.cron_expr = payload.cron_expr or None
+        current_user.cron_expr = payload.cron_expr or None
+    session.add(current_user)
     session.commit()
-    session.refresh(config)
+    session.refresh(current_user)
     if cron_changed:
-        bootstrap_scheduler(config.cron_expr)
+        # Re-bootstrap only the acting user's job from their new cron_expr.
+        bootstrap_user_job(current_user.id, current_user.cron_expr)
     return ConfigRead(
-        setup_required=not bool(config.client_id),
-        playlist_size=config.playlist_size,
-        cron_expr=config.cron_expr,
-        dynamic_playlist_id=config.dynamic_playlist_id,
-    )
-
-
-@router.put("/config", response_model=ConfigRead)
-def update_config(payload: ConfigWrite, session: SessionDep) -> ConfigRead:
-    config = session.exec(select(Config)).first()
-    if config is None:
-        config = Config()
-        session.add(config)
-    _validate_cron(payload.cron_expr)
-    config.client_id = payload.client_id
-    config.client_secret = payload.client_secret
-    config.playlist_size = payload.playlist_size if payload.playlist_size is not None else 50
-    config.cron_expr = payload.cron_expr or None
-    session.commit()
-    session.refresh(config)
-    bootstrap_scheduler(config.cron_expr)
-    return ConfigRead(
-        setup_required=not bool(config.client_id),
-        playlist_size=config.playlist_size,
-        cron_expr=config.cron_expr,
-        dynamic_playlist_id=config.dynamic_playlist_id,
+        setup_required=not bool(current_user.client_id),
+        playlist_size=current_user.playlist_size,
+        cron_expr=current_user.cron_expr,
+        dynamic_playlist_id=current_user.target_playlist_id,
     )

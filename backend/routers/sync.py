@@ -6,31 +6,36 @@ from fastapi.responses import StreamingResponse
 from sqlmodel import select
 
 import services.sync_engine as sync_engine
-from dependencies import SessionDep
+from dependencies import CurrentUserDep, SessionDep
 from models.sync_log import SyncLog
+from models.user import User
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
 
 @router.get("/logs")
-def get_sync_logs(session: SessionDep) -> list[SyncLog]:
+def get_sync_logs(session: SessionDep, current_user: CurrentUserDep) -> list[SyncLog]:
     logs = session.exec(
-        select(SyncLog).order_by(SyncLog.timestamp.desc())
+        select(SyncLog)
+        .where(SyncLog.user_id == current_user.id)
+        .order_by(SyncLog.timestamp.desc())
     ).all()
     return list(logs)
 
 
 @router.get("/status")
-def get_sync_status(session: SessionDep) -> SyncLog | None:
+def get_sync_status(session: SessionDep, current_user: CurrentUserDep) -> SyncLog | None:
     return session.exec(
-        select(SyncLog).order_by(SyncLog.timestamp.desc())
+        select(SyncLog)
+        .where(SyncLog.user_id == current_user.id)
+        .order_by(SyncLog.timestamp.desc())
     ).first()
 
 
 @router.post("/run")
-def run_sync() -> dict:
+def run_sync(current_user: CurrentUserDep) -> dict:
     try:
-        return sync_engine.run_sync()
+        return sync_engine.run_sync(current_user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -41,13 +46,13 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-async def _run_sync_stream():
+async def _run_sync_stream(current_user: User):
     """Async generator that runs the full sync pipeline and yields SSE events."""
     from datetime import datetime
     from sqlmodel import Session, select as sa_select
     from database import engine
-    from models.config import Config
     from models.playlist import Playlist
+    from models.user import User
     import services.spotify as spotify_service
     from services.sync_engine import harvest_tracks, deduplicate, sort_and_slice, _write_sync_log
 
@@ -58,18 +63,20 @@ async def _run_sync_stream():
 
         with Session(engine) as session:
             playlists = session.exec(
-                sa_select(Playlist).where(Playlist.is_included == True)  # noqa: E712
+                sa_select(Playlist).where(
+                    Playlist.user_id == current_user.id,
+                    Playlist.is_included == True,  # noqa: E712
+                )
             ).all()
             if not playlists:
                 raise ValueError("No playlists selected")
-            config = session.exec(sa_select(Config)).first()
-            playlist_size = config.playlist_size if config else 50
-            last_sync_at = config.last_sync_at if config else None
+        playlist_size = current_user.playlist_size
+        last_sync_at = current_user.last_sync_at
 
         yield _sse("sync_log", {"level": "info", "message": f"Found {len(playlists)} included playlist(s)", "timestamp": timestamp})
 
-        sp = await asyncio.to_thread(spotify_service.get_authenticated_client)
-        target_id = await asyncio.to_thread(spotify_service.get_or_create_dynamic_playlist, sp)
+        sp = await asyncio.to_thread(spotify_service.get_authenticated_client, current_user)
+        target_id = await asyncio.to_thread(spotify_service.get_or_create_dynamic_playlist, sp, current_user)
         existing_tracks = await asyncio.to_thread(spotify_service.get_playlist_tracks, target_id, sp)
         existing_ids = {t["spotify_id"] for t in existing_tracks}
 
@@ -91,24 +98,24 @@ async def _run_sync_stream():
         await asyncio.to_thread(spotify_service.replace_playlist_tracks, target_id, track_uris, sp)
 
         with Session(engine) as session:
-            cfg = session.exec(sa_select(Config)).first()
-            if cfg:
-                cfg.last_sync_at = timestamp
-                session.add(cfg)
+            db_user = session.get(User, current_user.id)
+            if db_user:
+                db_user.last_sync_at = timestamp
+                session.add(db_user)
                 session.commit()
 
-        _write_sync_log("success", len(sliced), new_track_count, None, timestamp)
+        _write_sync_log("success", len(sliced), new_track_count, None, timestamp, user_id=current_user.id)
         yield _sse("sync_complete", {"status": "success", "track_count": len(sliced), "new_track_count": new_track_count, "timestamp": timestamp})
 
     except Exception as exc:
-        _write_sync_log("failure", None, None, str(exc), timestamp)
+        _write_sync_log("failure", None, None, str(exc), timestamp, user_id=current_user.id)
         yield _sse("sync_error", {"status": "error", "message": str(exc), "timestamp": timestamp})
 
 
 @router.get("/stream")
-async def stream_sync():
+async def stream_sync(current_user: CurrentUserDep):
     return StreamingResponse(
-        _run_sync_stream(),
+        _run_sync_stream(current_user),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

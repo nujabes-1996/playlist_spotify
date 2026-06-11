@@ -7,7 +7,8 @@ from spotipy import SpotifyException
 
 from main import app
 from database import get_session
-from models.config import Config
+from dependencies import get_current_user
+from models.user import User
 
 
 @pytest.fixture(name="engine")
@@ -31,6 +32,7 @@ def client_fixture(session: Session):
         return session
 
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -128,6 +130,10 @@ def test_returns_empty_list_when_playlist_deleted_on_spotify(client):
 
 
 # --- Service-level unit tests ---
+#
+# Story 10.3: the dynamic playlist id lives on User.target_playlist_id, and the
+# blacklist read is scoped per user. Each test passes a user carrying the dynamic id
+# and patches services.spotify.engine at the in-memory test DB for the blacklist read.
 
 
 def _make_track(track_id, **overrides):
@@ -145,16 +151,13 @@ def _make_track(track_id, **overrides):
     return {"added_at": "2026-05-20T10:00:00Z", "is_local": False, "track": track}
 
 
-def _seed_config(engine, dynamic_playlist_id="dyn-1"):
-    with Session(engine) as s:
-        s.add(Config(client_id="cid", client_secret="csec", dynamic_playlist_id=dynamic_playlist_id))
-        s.commit()
+def _user(dynamic_playlist_id="dyn-1"):
+    return User(id=1, spotify_user_id="svc_user", target_playlist_id=dynamic_playlist_id)
 
 
 def test_service_paginates_and_concatenates(engine):
     from services import spotify as svc
 
-    _seed_config(engine)
     mock_sp = MagicMock()
     mock_sp.playlist.return_value = {"id": "dyn-1"}
     page1 = {
@@ -170,7 +173,7 @@ def test_service_paginates_and_concatenates(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(_user())
 
     assert len(result) == 150
     assert [t["spotify_id"] for t in result] == [f"t{i}" for i in range(150)]
@@ -179,7 +182,6 @@ def test_service_paginates_and_concatenates(engine):
 def test_service_skips_null_and_local_tracks(engine):
     from services import spotify as svc
 
-    _seed_config(engine)
     mock_sp = MagicMock()
     mock_sp.playlist.return_value = {"id": "dyn-1"}
     mock_sp.playlist_items.return_value = {
@@ -196,7 +198,7 @@ def test_service_skips_null_and_local_tracks(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(_user())
 
     assert len(result) == 1
     assert result[0]["spotify_id"] == "valid-1"
@@ -205,7 +207,6 @@ def test_service_skips_null_and_local_tracks(engine):
 def test_service_sets_image_url_null_when_no_album_images(engine):
     from services import spotify as svc
 
-    _seed_config(engine)
     mock_sp = MagicMock()
     mock_sp.playlist.return_value = {"id": "dyn-1"}
     mock_sp.playlist_items.return_value = {
@@ -216,7 +217,7 @@ def test_service_sets_image_url_null_when_no_album_images(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(_user())
 
     assert len(result) == 1
     assert result[0]["image_url"] is None
@@ -225,7 +226,6 @@ def test_service_sets_image_url_null_when_no_album_images(engine):
 def test_service_flattens_artists_to_names(engine):
     from services import spotify as svc
 
-    _seed_config(engine)
     mock_sp = MagicMock()
     mock_sp.playlist.return_value = {"id": "dyn-1"}
     mock_sp.playlist_items.return_value = {
@@ -238,7 +238,7 @@ def test_service_flattens_artists_to_names(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(_user())
 
     assert result[0]["artists"] == ["A", "B"]
 
@@ -246,7 +246,7 @@ def test_service_flattens_artists_to_names(engine):
 def test_service_returns_empty_when_playlist_gone(engine):
     from services import spotify as svc
 
-    _seed_config(engine, dynamic_playlist_id="ghost")
+    user = _user(dynamic_playlist_id="ghost")
     mock_sp = MagicMock()
     mock_sp.playlist.side_effect = SpotifyException(
         http_status=404, code=-1, msg="not found"
@@ -255,25 +255,20 @@ def test_service_returns_empty_when_playlist_gone(engine):
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client", return_value=mock_sp
     ):
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(user)
 
     assert result == []
-    # Verify config.dynamic_playlist_id NOT mutated
-    with Session(engine) as s:
-        from sqlmodel import select
-
-        cfg = s.exec(select(Config)).first()
-        assert cfg.dynamic_playlist_id == "ghost"
+    # user.target_playlist_id NOT mutated on a 404
+    assert user.target_playlist_id == "ghost"
 
 
-def test_service_returns_empty_when_no_config(engine):
+def test_service_returns_empty_when_no_dynamic_playlist(engine):
     from services import spotify as svc
 
-    # No Config row seeded
     with patch.object(svc, "engine", engine), patch.object(
         svc, "get_authenticated_client"
     ) as auth_mock:
-        result = svc.get_recently_added_tracks()
+        result = svc.get_recently_added_tracks(_user(dynamic_playlist_id=None))
 
     assert result == []
     auth_mock.assert_not_called()
@@ -282,7 +277,6 @@ def test_service_returns_empty_when_no_config(engine):
 def test_service_reraises_non_404_spotify_exception(engine):
     from services import spotify as svc
 
-    _seed_config(engine)
     mock_sp = MagicMock()
     mock_sp.playlist.side_effect = SpotifyException(
         http_status=500, code=-1, msg="boom"
@@ -292,4 +286,4 @@ def test_service_reraises_non_404_spotify_exception(engine):
         svc, "get_authenticated_client", return_value=mock_sp
     ):
         with pytest.raises(SpotifyException):
-            svc.get_recently_added_tracks()
+            svc.get_recently_added_tracks(_user())

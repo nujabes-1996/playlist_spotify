@@ -21,6 +21,15 @@ export interface AuthStatus {
   authenticated: boolean
   has_previous_auth?: boolean
   spotify_user_id?: string | null
+  display_name?: string | null
+  // Public callback URL the backend sends to Spotify; the login screen renders it so users
+  // register the exact URI (https://<DOMAIN>/api/v1/auth/callback in prod).
+  redirect_uri?: string
+}
+
+export interface ConnectRequest {
+  client_id: string
+  client_secret: string
 }
 
 export interface Playlist {

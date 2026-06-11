@@ -6,6 +6,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
+from dependencies import get_current_user
+from models.user import User
 from models.playlist import Playlist
 
 
@@ -25,6 +27,7 @@ def client_fixture(session: Session):
         return session
 
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -49,7 +52,7 @@ def test_get_playlists_returns_upserted_list(client):
 
 
 def test_get_playlists_updates_name_on_existing(client, session):
-    session.add(Playlist(spotify_id="abc", name="Old Name"))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="Old Name"))
     session.commit()
     with patch("routers.playlists.spotify_service.get_user_playlists", return_value=MOCK_PLAYLISTS):
         r = client.get("/api/v1/playlists")
@@ -59,7 +62,7 @@ def test_get_playlists_updates_name_on_existing(client, session):
 
 
 def test_get_playlists_removes_deleted_from_spotify(client, session):
-    session.add(Playlist(spotify_id="gone", name="Old Playlist"))
+    session.add(Playlist(user_id=1, spotify_id="gone", name="Old Playlist"))
     session.commit()
     with patch("routers.playlists.spotify_service.get_user_playlists", return_value=MOCK_PLAYLISTS):
         r = client.get("/api/v1/playlists")
@@ -69,7 +72,7 @@ def test_get_playlists_removes_deleted_from_spotify(client, session):
 
 
 def test_get_playlists_preserves_is_included(client, session):
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=True))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=True))
     session.commit()
     with patch("routers.playlists.spotify_service.get_user_playlists", return_value=MOCK_PLAYLISTS):
         r = client.get("/api/v1/playlists")
@@ -79,7 +82,7 @@ def test_get_playlists_preserves_is_included(client, session):
 
 
 def test_patch_sets_included_true(client, session):
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=False))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=False))
     session.commit()
     r = client.patch("/api/v1/playlists/abc", json={"is_included": True})
     assert r.status_code == 200
@@ -88,7 +91,7 @@ def test_patch_sets_included_true(client, session):
 
 
 def test_patch_sets_included_false(client, session):
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=True))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=True))
     session.commit()
     r = client.patch("/api/v1/playlists/abc", json={"is_included": False})
     assert r.status_code == 200

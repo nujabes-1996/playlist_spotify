@@ -1,10 +1,15 @@
+import json
 import os
+import secrets
+from datetime import datetime
 
 from spotipy import Spotify, SpotifyException, SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler
 from sqlmodel import Session, select
 
 from database import engine
-from models.config import Config
+from migrations import run_migrations
+from models.user import User
 from services import blacklist_service
 from services.token_manager import SQLiteCacheHandler
 
@@ -14,55 +19,146 @@ LIKED_SONGS_ID = "liked_songs"
 REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8000/api/v1/auth/callback")
 
 
-def _get_spotify_oauth() -> SpotifyOAuth:
-    with Session(engine) as session:
-        config = session.exec(select(Config)).first()
-        if config is None or not config.client_id:
-            raise ValueError("Spotify credentials not configured — run setup first")
-        client_id = config.client_id
-        client_secret = config.client_secret
+def _get_spotify_oauth(user: User) -> SpotifyOAuth:
+    """Build a SpotifyOAuth for an existing user, keyed to their own token cache."""
+    if user is None or not user.client_id:
+        raise ValueError("Spotify credentials not configured — run setup first")
     return SpotifyOAuth(
+        client_id=user.client_id,
+        client_secret=user.client_secret,
+        redirect_uri=REDIRECT_URI,
+        scope=SCOPES,
+        cache_handler=SQLiteCacheHandler(user.id),
+    )
+
+
+def start_login(request_session, client_id: str, client_secret: str) -> str:
+    """Begin the per-user OAuth round-trip for an anonymous visitor.
+
+    The visitor has no User row yet, so we hold their just-entered credentials and a
+    CSRF `state` in the (anonymous) session and build a transient SpotifyOAuth backed
+    by a MemoryCacheHandler (no DB write before the user exists). Returns the authorize
+    URL (which embeds `state`).
+    """
+    state = secrets.token_urlsafe(32)
+    request_session["pending_client_id"] = client_id
+    request_session["pending_client_secret"] = client_secret
+    request_session["oauth_state"] = state
+    sp_oauth = SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=REDIRECT_URI,
         scope=SCOPES,
-        cache_handler=SQLiteCacheHandler(),
+        state=state,
+        cache_handler=MemoryCacheHandler(),
     )
-
-
-def get_auth_url() -> str:
-    sp_oauth = _get_spotify_oauth()
     return sp_oauth.get_authorize_url()
 
 
-def handle_callback(code: str) -> None:
-    sp_oauth = _get_spotify_oauth()
-    sp_oauth.get_access_token(code, check_cache=False)
+def complete_login(request_session, code: str) -> None:
+    """Finish the OAuth round-trip: exchange code, resolve-or-create the User, open session.
+
+    Rebuilds the transient OAuth from the session's pending creds, exchanges the code,
+    reads identity via sp.me(), resolves/creates the User by spotify_user_id, persists
+    creds + token directly on the row, then opens the session and clears the transients.
+    """
+    client_id = request_session.get("pending_client_id")
+    client_secret = request_session.get("pending_client_secret")
+    sp_oauth = SpotifyOAuth(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=REDIRECT_URI,
+        scope=SCOPES,
+        cache_handler=MemoryCacheHandler(),
+    )
+    token_info = sp_oauth.get_access_token(code, check_cache=False)
+    me = Spotify(auth=token_info["access_token"]).me()
+    spotify_user_id = me["id"]
+    display_name = me.get("display_name")
+
+    with Session(engine) as session:
+        user = session.exec(
+            select(User).where(User.spotify_user_id == spotify_user_id)
+        ).first()
+        is_new_user = user is None
+        if is_new_user:
+            user = User(
+                spotify_user_id=spotify_user_id,
+                created_at=datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            session.add(user)
+        user.client_id = client_id
+        user.client_secret = client_secret
+        user.token_json = json.dumps(token_info)
+        user.display_name = display_name
+        session.commit()
+        session.refresh(user)
+        user_id = user.id
+
+    # The startup migration DEFERS reshaping legacy single-tenant tables (notably
+    # track_blacklist, whose user_id is part of a NOT NULL composite PK) when no User
+    # exists yet to own the rows. The first login is exactly the moment an owner appears,
+    # so finish the migration now instead of stranding the legacy shape until the next
+    # reboot. run_migrations is idempotent, so gate it on first-user creation to avoid
+    # re-running on every subsequent login.
+    if is_new_user:
+        run_migrations(engine)
+
+    request_session["user_id"] = user_id
+    request_session.pop("pending_client_id", None)
+    request_session.pop("pending_client_secret", None)
+    request_session.pop("oauth_state", None)
 
 
-def get_auth_status() -> dict:
+def get_auth_status(user: User) -> dict:
+    """Per-user auth status for the session's resolved User."""
     try:
-        sp_oauth = _get_spotify_oauth()
+        sp_oauth = _get_spotify_oauth(user)
     except ValueError:
-        return {"authenticated": False, "has_previous_auth": False, "spotify_user_id": None}
+        return {
+            "authenticated": False,
+            "has_previous_auth": False,
+            "spotify_user_id": None,
+            "display_name": getattr(user, "display_name", None),
+        }
 
     try:
         token_info = sp_oauth.get_cached_token()
         if token_info is None:
-            return {"authenticated": False, "has_previous_auth": False, "spotify_user_id": None}
+            return {
+                "authenticated": False,
+                "has_previous_auth": False,
+                "spotify_user_id": None,
+                "display_name": user.display_name,
+            }
         token_info = sp_oauth.validate_token(token_info)
         if token_info is None:
-            return {"authenticated": False, "has_previous_auth": True, "spotify_user_id": None}
+            return {
+                "authenticated": False,
+                "has_previous_auth": True,
+                "spotify_user_id": None,
+                "display_name": user.display_name,
+            }
         sp = Spotify(auth=token_info["access_token"])
-        user = sp.me()
-        return {"authenticated": True, "has_previous_auth": True, "spotify_user_id": user["id"]}
+        me = sp.me()
+        return {
+            "authenticated": True,
+            "has_previous_auth": True,
+            "spotify_user_id": me["id"],
+            "display_name": me.get("display_name") or user.display_name,
+        }
     except Exception:
-        return {"authenticated": False, "has_previous_auth": True, "spotify_user_id": None}
+        return {
+            "authenticated": False,
+            "has_previous_auth": True,
+            "spotify_user_id": None,
+            "display_name": user.display_name,
+        }
 
 
-def get_authenticated_client() -> Spotify:
-    """Return an authenticated Spotify client, refreshing the token if needed."""
-    sp_oauth = _get_spotify_oauth()
+def get_authenticated_client(user: User) -> Spotify:
+    """Return an authenticated Spotify client for the given user, refreshing if needed."""
+    sp_oauth = _get_spotify_oauth(user)
     token_info = sp_oauth.get_cached_token()
     if token_info is None:
         raise ValueError("Not authenticated — run OAuth2 flow first")
@@ -72,17 +168,14 @@ def get_authenticated_client() -> Spotify:
     return Spotify(auth=token_info["access_token"])
 
 
-def get_user_playlists() -> list[dict]:
+def get_user_playlists(user: User = None) -> list[dict]:
     """Fetch all user-owned playlists + Liked Songs.
 
     Returns [{spotify_id, name, image_url, track_count}].
     """
-    sp = get_authenticated_client()
+    sp = get_authenticated_client(user)
     user_id = sp.me()["id"]
-
-    with Session(engine) as session:
-        config = session.exec(select(Config)).first()
-        dynamic_playlist_id = config.dynamic_playlist_id if config else None
+    dynamic_playlist_id = user.target_playlist_id
 
     liked_total = sp.current_user_saved_tracks(limit=1)["total"]
     results = [
@@ -123,12 +216,12 @@ DYNAMIC_PLAYLIST_NAME = "Recent Adds"
 DYNAMIC_PLAYLIST_DESCRIPTION = "Managed by playlist_spotify"
 
 
-def _persist_dynamic_playlist_id(playlist_id: str) -> None:
+def _persist_dynamic_playlist_id(playlist_id: str, user: User) -> None:
     with Session(engine) as session:
-        config = session.exec(select(Config)).first()
-        if config and config.dynamic_playlist_id != playlist_id:
-            config.dynamic_playlist_id = playlist_id
-            session.add(config)
+        db_user = session.get(User, user.id)
+        if db_user and db_user.target_playlist_id != playlist_id:
+            db_user.target_playlist_id = playlist_id
+            session.add(db_user)
             session.commit()
 
 
@@ -154,16 +247,15 @@ def _find_existing_dynamic_playlist(sp: Spotify) -> str | None:
         offset += limit
 
 
-def get_or_create_dynamic_playlist(sp: Spotify) -> str:
-    """Return the Spotify ID of the 'Recent Adds' playlist, creating it if needed.
+def get_or_create_dynamic_playlist(sp: Spotify, user: User) -> str:
+    """Return the Spotify ID of the user's 'Recent Adds' playlist, creating it if needed.
 
-    Self-heals when config.dynamic_playlist_id is missing but the playlist already
-    exists on Spotify (e.g. legacy installs where the create succeeded but the config
-    write didn't commit) — searches by name + managed description and re-adopts it.
+    Self-heals when user.target_playlist_id is missing but the playlist already exists
+    on Spotify (e.g. legacy installs where the create succeeded but the write didn't
+    commit) — searches by name + managed description and re-adopts it. The id is stored
+    per-user on user.target_playlist_id.
     """
-    with Session(engine) as session:
-        config = session.exec(select(Config)).first()
-        stored_id = config.dynamic_playlist_id if config else None
+    stored_id = user.target_playlist_id
 
     if stored_id:
         try:
@@ -175,14 +267,14 @@ def get_or_create_dynamic_playlist(sp: Spotify) -> str:
     # Re-adopt an existing managed playlist before creating a duplicate
     existing_id = _find_existing_dynamic_playlist(sp)
     if existing_id:
-        _persist_dynamic_playlist_id(existing_id)
+        _persist_dynamic_playlist_id(existing_id, user)
         return existing_id
 
     new_playlist = sp.current_user_playlist_create(
         DYNAMIC_PLAYLIST_NAME, public=False, description=DYNAMIC_PLAYLIST_DESCRIPTION
     )
     new_id = new_playlist["id"]
-    _persist_dynamic_playlist_id(new_id)
+    _persist_dynamic_playlist_id(new_id, user)
     return new_id
 
 
@@ -215,7 +307,9 @@ def _get_liked_tracks(sp: Spotify, since: str | None = None) -> list[dict]:
     return results
 
 
-def get_playlist_tracks(playlist_id: str, sp: Spotify = None, since: str | None = None) -> list[dict]:
+def get_playlist_tracks(
+    playlist_id: str, sp: Spotify = None, since: str | None = None, user: User = None
+) -> list[dict]:
     """
     Fetch tracks from a playlist (or Liked Songs).
 
@@ -224,7 +318,7 @@ def get_playlist_tracks(playlist_id: str, sp: Spotify = None, since: str | None 
     the end and stops as soon as a page contains any track at or before `since`.
     """
     if sp is None:
-        sp = get_authenticated_client()
+        sp = get_authenticated_client(user)
     if playlist_id == LIKED_SONGS_ID:
         return _get_liked_tracks(sp, since=since)
 
@@ -300,16 +394,16 @@ def _build_track_row(track: dict, added_at: str, blacklisted_ids: set[str]) -> d
     }
 
 
-def get_playlist_tracks_full(playlist_id: str) -> list[dict]:
+def get_playlist_tracks_full(playlist_id: str, user: User = None) -> list[dict]:
     """Return every track of a playlist (or Liked Songs) as full rich-shape dicts.
 
     Mirrors get_recently_added_tracks shape. For LIKED_SONGS_ID, uses the
     saved-tracks API. Re-raises SpotifyException on 404 (router translates to
     HTTP 404) and on other Spotify errors (router → 502).
     """
-    sp = get_authenticated_client()
+    sp = get_authenticated_client(user)
     with Session(engine) as session:
-        blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
+        blacklisted_ids = blacklist_service.get_blacklisted_ids(session, user.id)
     results: list[dict] = []
     offset = 0
 
@@ -360,16 +454,16 @@ def get_playlist_tracks_full(playlist_id: str) -> list[dict]:
 
 
 def get_playlist_tracks_page(
-    playlist_id: str, limit: int, offset: int
+    playlist_id: str, limit: int, offset: int, user: User = None
 ) -> dict:
     """Return a single page of tracks plus pagination metadata.
 
     next_offset advances by raw page length (Spotify's notion of progress), not
     by kept length (post-filter). Returns next_offset=None when end reached.
     """
-    sp = get_authenticated_client()
+    sp = get_authenticated_client(user)
     with Session(engine) as session:
-        blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
+        blacklisted_ids = blacklist_service.get_blacklisted_ids(session, user.id)
 
     items: list[dict] = []
 
@@ -419,21 +513,20 @@ def get_playlist_tracks_page(
     return {"items": items, "next_offset": next_offset, "total": total}
 
 
-def get_recently_added_tracks() -> list[dict]:
+def get_recently_added_tracks(user: User = None) -> list[dict]:
     """Return the current contents of the dynamic playlist as shaped dicts.
 
     Returns [] when the dynamic playlist has not been created yet (fresh install)
     or has been deleted from Spotify. Re-raises ValueError if not authenticated
     and SpotifyException for non-404 Spotify errors.
     """
+    playlist_id = user.target_playlist_id
     with Session(engine) as session:
-        config = session.exec(select(Config)).first()
-        playlist_id = config.dynamic_playlist_id if config else None
-        blacklisted_ids = blacklist_service.get_blacklisted_ids(session)
+        blacklisted_ids = blacklist_service.get_blacklisted_ids(session, user.id)
     if not playlist_id:
         return []
 
-    sp = get_authenticated_client()
+    sp = get_authenticated_client(user)
     try:
         sp.playlist(playlist_id, fields="id")
     except SpotifyException as exc:

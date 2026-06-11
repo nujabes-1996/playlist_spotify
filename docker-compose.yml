@@ -14,6 +14,16 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+    environment:
+      # Dev default is insecure on purpose; override for anything shared.
+      - SESSION_SECRET=${SESSION_SECRET:-insecure-dev-secret-change-me}
+      # OAuth round-trip (Story 10.2 dev): the redirect URI must EXACTLY match one registered
+      # in the Spotify app dashboard (here :8000). Cookies are keyed by host only (port-agnostic),
+      # so a session cookie set on 127.0.0.1:5173 (via the Vite proxy during /auth/connect) is
+      # still sent when Spotify redirects to the callback on 127.0.0.1:8000. Browse the app at
+      # http://127.0.0.1:5173 — NOT localhost (localhost and 127.0.0.1 are different cookie hosts).
+      - SPOTIFY_REDIRECT_URI=http://127.0.0.1:8000/api/v1/auth/callback
+      - FRONTEND_URL=http://127.0.0.1:5173
     volumes:
       - ./backend:/app
       - ./data:/data

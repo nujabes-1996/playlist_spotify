@@ -6,6 +6,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
+from dependencies import get_current_user
+from models.user import User
 
 
 @pytest.fixture(name="session")
@@ -23,6 +25,7 @@ def client_fixture(session: Session):
     def get_session_override():
         return session
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()

@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from spotipy import SpotifyException
 
+from dependencies import CurrentUserDep
 from services import spotify as spotify_service
 
 router = APIRouter(tags=["recently-added"])
@@ -21,9 +22,9 @@ class RecentlyAddedTrack(BaseModel):
 
 
 @router.get("/recently-added", response_model=list[RecentlyAddedTrack])
-def get_recently_added() -> list[RecentlyAddedTrack]:
+def get_recently_added(current_user: CurrentUserDep) -> list[RecentlyAddedTrack]:
     try:
-        tracks = spotify_service.get_recently_added_tracks()
+        tracks = spotify_service.get_recently_added_tracks(current_user)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
     except SpotifyException as exc:

@@ -1,29 +1,37 @@
 import json
 from spotipy.cache_handler import CacheHandler
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from database import engine
-from models.config import Config
+from models.user import User
 
 
 class SQLiteCacheHandler(CacheHandler):
-    """Stores spotipy OAuth token in the SQLite config table.
+    """Stores spotipy OAuth token on a User row in SQLite, keyed by user_id.
 
-    Replaces default CacheFileHandler (filesystem-based, not Docker-safe).
+    Replaces default CacheFileHandler (filesystem-based, not Docker-safe) and the
+    legacy global Config-based handler. Each user's token lives on User.token_json,
+    so a token saved for user A is invisible to user B.
     """
+
+    def __init__(self, user_id: int):
+        self.user_id = user_id
 
     def get_cached_token(self):
         with Session(engine) as session:
-            config = session.exec(select(Config)).first()
-            if config and config.spotify_token_json:
-                return json.loads(config.spotify_token_json)
+            user = session.get(User, self.user_id)
+            if user and user.token_json:
+                return json.loads(user.token_json)
             return None
 
     def save_token_to_cache(self, token_info):
         with Session(engine) as session:
-            config = session.exec(select(Config)).first()
-            if config is None:
-                config = Config()
-                session.add(config)
-            config.spotify_token_json = json.dumps(token_info)
+            user = session.get(User, self.user_id)
+            # Defensive: the callback persists the first token directly on the row,
+            # so the row always exists by the time refreshes flow through here. If
+            # it's missing (e.g. user deleted), no-op rather than create a ghost row.
+            if user is None:
+                return
+            user.token_json = json.dumps(token_info)
+            session.add(user)
             session.commit()

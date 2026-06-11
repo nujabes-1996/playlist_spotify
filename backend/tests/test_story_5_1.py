@@ -5,6 +5,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
+from dependencies import get_current_user
+from models.user import User
 from models.sync_log import SyncLog
 
 
@@ -23,6 +25,7 @@ def client_fixture(session: Session):
     def get_session_override():
         return session
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -35,8 +38,8 @@ def test_get_logs_empty_returns_empty_array(client):
 
 
 def test_get_logs_returns_entries_ordered_desc(client, session):
-    session.add(SyncLog(status="success", track_count=10, timestamp="2026-05-01T10:00:00Z"))
-    session.add(SyncLog(status="success", track_count=20, timestamp="2026-05-02T10:00:00Z"))
+    session.add(SyncLog(user_id=1, status="success", track_count=10, timestamp="2026-05-01T10:00:00Z"))
+    session.add(SyncLog(user_id=1, status="success", track_count=20, timestamp="2026-05-02T10:00:00Z"))
     session.commit()
     r = client.get("/api/v1/sync/logs")
     assert r.status_code == 200
@@ -46,7 +49,7 @@ def test_get_logs_returns_entries_ordered_desc(client, session):
 
 
 def test_get_logs_success_entry_shape(client, session):
-    session.add(SyncLog(status="success", track_count=42, error_message=None, timestamp="2026-05-01T12:00:00Z"))
+    session.add(SyncLog(user_id=1, status="success", track_count=42, error_message=None, timestamp="2026-05-01T12:00:00Z"))
     session.commit()
     r = client.get("/api/v1/sync/logs")
     assert r.status_code == 200
@@ -59,7 +62,7 @@ def test_get_logs_success_entry_shape(client, session):
 
 
 def test_get_logs_failure_entry_shape(client, session):
-    session.add(SyncLog(status="failure", track_count=None, error_message="Token expired", timestamp="2026-05-01T13:00:00Z"))
+    session.add(SyncLog(user_id=1, status="failure", track_count=None, error_message="Token expired", timestamp="2026-05-01T13:00:00Z"))
     session.commit()
     r = client.get("/api/v1/sync/logs")
     assert r.status_code == 200

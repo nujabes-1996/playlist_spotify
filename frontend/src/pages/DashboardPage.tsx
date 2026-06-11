@@ -1,32 +1,10 @@
-import { useConfig } from '@/hooks/useConfig'
-import { useAuthStatus } from '@/hooks/useAuthStatus'
-import SetupWizard from '@/features/config/SetupWizard'
-import SpotifyConnect from '@/features/auth/SpotifyConnect'
-import ReauthBanner from '@/features/auth/ReauthBanner'
 import PlaylistGrid from '@/features/playlists/PlaylistGrid'
 import HiddenPlaylistsAccordion from '@/features/playlists/HiddenPlaylistsAccordion'
 import SyncEventLog from '@/features/sync/SyncEventLog'
 
+// Auth/setup gating moved to AppShell (Story 10.2): by the time this renders the
+// visitor has a valid session, so the dashboard just shows playlist content.
 export default function DashboardPage() {
-  const config = useConfig()
-  const authStatus = useAuthStatus()
-
-  if (config.isPending || authStatus.isPending) {
-    return <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
-  }
-
-  if (config.isError || authStatus.isError) {
-    return <div className="text-sm text-red-500">Failed to load configuration.</div>
-  }
-
-  if (config.data.setup_required) {
-    return <SetupWizard />
-  }
-
-  if (!authStatus.data.authenticated) {
-    return authStatus.data.has_previous_auth ? <ReauthBanner /> : <SpotifyConnect />
-  }
-
   return (
     <div className="space-y-6">
       <div>

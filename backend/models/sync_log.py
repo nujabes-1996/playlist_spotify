@@ -6,6 +6,7 @@ class SyncLog(SQLModel, table=True):
     __tablename__ = "sync_log"  # type: ignore[assignment]
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     status: str  # "success" or "failure"
     track_count: Optional[int] = None
     new_track_count: Optional[int] = None

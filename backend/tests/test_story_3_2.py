@@ -6,6 +6,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
+from dependencies import get_current_user
+from models.user import User
 from models.playlist import Playlist
 
 
@@ -24,6 +26,7 @@ def client_fixture(session: Session):
     def get_session_override():
         return session
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -37,8 +40,8 @@ SPOTIFY_PLAYLISTS = [
 
 def test_is_included_preserved_on_repeated_get(client, session):
     """AC1 — Upsert must never reset is_included for existing playlists."""
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=True))
-    session.add(Playlist(spotify_id="def", name="Chill Vibes", is_included=False))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=True))
+    session.add(Playlist(user_id=1, spotify_id="def", name="Chill Vibes", is_included=False))
     session.commit()
 
     with patch("routers.playlists.spotify_service.get_user_playlists", return_value=SPOTIFY_PLAYLISTS):
@@ -52,7 +55,7 @@ def test_is_included_preserved_on_repeated_get(client, session):
 
 def test_new_playlist_appears_with_false_default(client, session):
     """AC2 — New Spotify playlist (not yet in DB) appears with is_included=False."""
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=True))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=True))
     session.commit()
 
     spotify_with_new = SPOTIFY_PLAYLISTS + [{"spotify_id": "xyz", "name": "New Finds"}]
@@ -68,8 +71,8 @@ def test_new_playlist_appears_with_false_default(client, session):
 
 def test_removed_playlist_not_in_list(client, session):
     """AC3 — Playlist deleted from Spotify (is_included=False) is removed from the response."""
-    session.add(Playlist(spotify_id="gone", name="Removed", is_included=False))
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=False))
+    session.add(Playlist(user_id=1, spotify_id="gone", name="Removed", is_included=False))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=False))
     session.commit()
 
     with patch("routers.playlists.spotify_service.get_user_playlists", return_value=[SPOTIFY_PLAYLISTS[0]]):
@@ -83,8 +86,8 @@ def test_removed_playlist_not_in_list(client, session):
 
 def test_included_playlist_removed_when_deleted_from_spotify(client, session):
     """AC4 — Previously included playlist (is_included=True) deleted from Spotify is removed from DB."""
-    session.add(Playlist(spotify_id="was_included", name="Fave Mix", is_included=True))
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=False))
+    session.add(Playlist(user_id=1, spotify_id="was_included", name="Fave Mix", is_included=True))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=False))
     session.commit()
 
     with patch("routers.playlists.spotify_service.get_user_playlists", return_value=[SPOTIFY_PLAYLISTS[0]]):

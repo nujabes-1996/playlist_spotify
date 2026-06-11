@@ -3,10 +3,10 @@ from unittest.mock import patch, MagicMock
 from sqlmodel import SQLModel, Session, create_engine, select
 from sqlmodel.pool import StaticPool
 
-from models.config import Config
 from models.playlist import Playlist
 from models.sync_log import SyncLog
 from models.track_blacklist import TrackBlacklist
+from models.user import User
 import services.sync_engine as sync_engine
 import services.blacklist_service as blacklist_service
 
@@ -18,6 +18,9 @@ def session_fixture():
     )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
+        # Story 10.2: scheduled sync resolves the single logged-in user
+        session.add(User(spotify_user_id="scheduled", client_id="c", client_secret="s", token_json="{}"))
+        session.commit()
         yield session
 
 
@@ -32,15 +35,15 @@ PLAYLIST_TRACKS = [
 # ────────────────────────────────────────────────────────────
 
 def test_get_blacklisted_ids_empty(session):
-    assert blacklist_service.get_blacklisted_ids(session) == set()
+    assert blacklist_service.get_blacklisted_ids(session, 1) == set()
 
 
 def test_get_blacklisted_ids_returns_all_ids(session):
-    session.add(TrackBlacklist(spotify_id="id1", blacklisted_at="2026-05-20T00:00:00Z"))
-    session.add(TrackBlacklist(spotify_id="id2", blacklisted_at="2026-05-20T00:00:00Z"))
+    session.add(TrackBlacklist(user_id=1, spotify_id="id1", blacklisted_at="2026-05-20T00:00:00Z"))
+    session.add(TrackBlacklist(user_id=1, spotify_id="id2", blacklisted_at="2026-05-20T00:00:00Z"))
     session.commit()
 
-    assert blacklist_service.get_blacklisted_ids(session) == {"id1", "id2"}
+    assert blacklist_service.get_blacklisted_ids(session, 1) == {"id1", "id2"}
 
 
 # ────────────────────────────────────────────────────────────
@@ -48,8 +51,10 @@ def test_get_blacklisted_ids_returns_all_ids(session):
 # ────────────────────────────────────────────────────────────
 
 def test_run_sync_unchanged_when_blacklist_empty(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=2, dynamic_playlist_id="dyn_id"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
+    _user = session.exec(select(User)).first()
+    _user.playlist_size = 2
+    session.add(_user)
     session.commit()
 
     mock_sp = MagicMock()
@@ -60,7 +65,7 @@ def test_run_sync_unchanged_when_blacklist_empty(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
-        sync_engine.run_sync()
+        sync_engine.run_sync(1)
 
     captured_uris = mock_replace.call_args[0][1]
     assert captured_uris == ["spotify:track:t1", "spotify:track:t2"]
@@ -71,9 +76,11 @@ def test_run_sync_unchanged_when_blacklist_empty(session):
 # ────────────────────────────────────────────────────────────
 
 def test_run_sync_excludes_blacklisted_track(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=2, dynamic_playlist_id="dyn_id"))
-    session.add(TrackBlacklist(spotify_id="t1", blacklisted_at="2026-05-20T00:00:00Z"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
+    _user = session.exec(select(User)).first()
+    _user.playlist_size = 2
+    session.add(_user)
+    session.add(TrackBlacklist(user_id=1, spotify_id="t1", blacklisted_at="2026-05-20T00:00:00Z"))
     session.commit()
 
     mock_sp = MagicMock()
@@ -84,7 +91,7 @@ def test_run_sync_excludes_blacklisted_track(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
-        sync_engine.run_sync()
+        sync_engine.run_sync(1)
 
     captured_uris = mock_replace.call_args[0][1]
     assert captured_uris == ["spotify:track:t2"]
@@ -99,10 +106,12 @@ def test_run_sync_excludes_blacklisted_track(session):
 # ────────────────────────────────────────────────────────────
 
 def test_run_sync_completes_when_blacklist_drains_candidates(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=50, dynamic_playlist_id="dyn_id"))
-    session.add(TrackBlacklist(spotify_id="t1", blacklisted_at="2026-05-20T00:00:00Z"))
-    session.add(TrackBlacklist(spotify_id="t2", blacklisted_at="2026-05-20T00:00:00Z"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
+    _user = session.exec(select(User)).first()
+    _user.playlist_size = 50
+    session.add(_user)
+    session.add(TrackBlacklist(user_id=1, spotify_id="t1", blacklisted_at="2026-05-20T00:00:00Z"))
+    session.add(TrackBlacklist(user_id=1, spotify_id="t2", blacklisted_at="2026-05-20T00:00:00Z"))
     session.commit()
 
     mock_sp = MagicMock()
@@ -113,7 +122,7 @@ def test_run_sync_completes_when_blacklist_drains_candidates(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
-        result = sync_engine.run_sync()
+        result = sync_engine.run_sync(1)
 
     assert result == {"status": "success", "track_count": 0, "new_track_count": 0}
     captured_uris = mock_replace.call_args[0][1]
@@ -129,15 +138,12 @@ def test_run_sync_completes_when_blacklist_drains_candidates(session):
 # ────────────────────────────────────────────────────────────
 
 def test_run_sync_delta_path_excludes_blacklisted_existing_track(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(
-        Config(
-            playlist_size=10,
-            dynamic_playlist_id="dyn_id",
-            last_sync_at="2026-05-19T00:00:00Z",
-        )
-    )
-    session.add(TrackBlacklist(spotify_id="old_track", blacklisted_at="2026-05-20T00:00:00Z"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
+    _user = session.exec(select(User)).first()
+    _user.playlist_size = 10
+    _user.last_sync_at = "2026-05-19T00:00:00Z"
+    session.add(_user)
+    session.add(TrackBlacklist(user_id=1, spotify_id="old_track", blacklisted_at="2026-05-20T00:00:00Z"))
     session.commit()
 
     existing = [
@@ -168,7 +174,7 @@ def test_run_sync_delta_path_excludes_blacklisted_existing_track(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
-        sync_engine.run_sync()
+        sync_engine.run_sync(1)
 
     captured_uris = mock_replace.call_args[0][1]
     assert captured_uris == ["spotify:track:new_track"]
@@ -179,9 +185,11 @@ def test_run_sync_delta_path_excludes_blacklisted_existing_track(session):
 # ────────────────────────────────────────────────────────────
 
 def test_run_sync_restores_track_after_blacklist_delete(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=2, dynamic_playlist_id="dyn_id"))
-    row = TrackBlacklist(spotify_id="t1", blacklisted_at="2026-05-20T00:00:00Z")
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
+    _user = session.exec(select(User)).first()
+    _user.playlist_size = 2
+    session.add(_user)
+    row = TrackBlacklist(spotify_id="t1", user_id=_user.id, blacklisted_at="2026-05-20T00:00:00Z")
     session.add(row)
     session.commit()
 
@@ -193,7 +201,7 @@ def test_run_sync_restores_track_after_blacklist_delete(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
-        sync_engine.run_sync()
+        sync_engine.run_sync(1)
         first_uris = mock_replace.call_args[0][1]
     assert first_uris == ["spotify:track:t2"]
 
@@ -208,6 +216,6 @@ def test_run_sync_restores_track_after_blacklist_delete(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
-        sync_engine.run_sync()
+        sync_engine.run_sync(1)
         second_uris = mock_replace.call_args[0][1]
     assert second_uris == ["spotify:track:t1", "spotify:track:t2"]

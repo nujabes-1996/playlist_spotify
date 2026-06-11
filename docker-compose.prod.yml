@@ -7,6 +7,10 @@ services:
       - CORS_ORIGINS=https://${DOMAIN}
       - FRONTEND_URL=https://${DOMAIN}
       - SPOTIFY_REDIRECT_URI=https://${DOMAIN}/api/v1/auth/callback
+      # MUST be a strong random secret (e.g. `openssl rand -hex 32`); never commit a real value.
+      - SESSION_SECRET=${SESSION_SECRET}
+      # Enables the Secure flag on the session cookie (served over HTTPS in prod).
+      - SESSION_COOKIE_SECURE=true
     volumes:
       # Seule donnée à conserver : la base SQLite (config, playlists, blacklist, token Spotify).
       - ./data:/data

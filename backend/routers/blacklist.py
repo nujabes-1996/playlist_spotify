@@ -4,7 +4,7 @@ from fastapi import APIRouter, Response, status
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from dependencies import SessionDep
+from dependencies import CurrentUserDep, SessionDep
 from models.track_blacklist import TrackBlacklist
 
 router = APIRouter(tags=["blacklist"])
@@ -20,9 +20,11 @@ class BlacklistCreate(BaseModel):
 
 
 @router.get("/blacklist", response_model=list[BlacklistRead])
-def get_blacklist(session: SessionDep) -> list[BlacklistRead]:
+def get_blacklist(session: SessionDep, current_user: CurrentUserDep) -> list[BlacklistRead]:
     rows = session.exec(
-        select(TrackBlacklist).order_by(TrackBlacklist.blacklisted_at.desc())
+        select(TrackBlacklist)
+        .where(TrackBlacklist.user_id == current_user.id)
+        .order_by(TrackBlacklist.blacklisted_at.desc())
     ).all()
     return [
         BlacklistRead(spotify_id=r.spotify_id, blacklisted_at=r.blacklisted_at)
@@ -32,10 +34,16 @@ def get_blacklist(session: SessionDep) -> list[BlacklistRead]:
 
 @router.post("/blacklist", response_model=BlacklistRead)
 def add_to_blacklist(
-    payload: BlacklistCreate, session: SessionDep, response: Response
+    payload: BlacklistCreate,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+    response: Response,
 ) -> BlacklistRead:
     existing = session.exec(
-        select(TrackBlacklist).where(TrackBlacklist.spotify_id == payload.spotify_id)
+        select(TrackBlacklist).where(
+            TrackBlacklist.user_id == current_user.id,
+            TrackBlacklist.spotify_id == payload.spotify_id,
+        )
     ).first()
     if existing is not None:
         response.status_code = status.HTTP_200_OK
@@ -45,6 +53,7 @@ def add_to_blacklist(
 
     row = TrackBlacklist(
         spotify_id=payload.spotify_id,
+        user_id=current_user.id,
         blacklisted_at=datetime.utcnow().isoformat(),
     )
     session.add(row)
@@ -55,9 +64,14 @@ def add_to_blacklist(
 
 
 @router.delete("/blacklist/{spotify_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_from_blacklist(spotify_id: str, session: SessionDep) -> Response:
+def remove_from_blacklist(
+    spotify_id: str, session: SessionDep, current_user: CurrentUserDep
+) -> Response:
     row = session.exec(
-        select(TrackBlacklist).where(TrackBlacklist.spotify_id == spotify_id)
+        select(TrackBlacklist).where(
+            TrackBlacklist.user_id == current_user.id,
+            TrackBlacklist.spotify_id == spotify_id,
+        )
     ).first()
     if row is not None:
         session.delete(row)

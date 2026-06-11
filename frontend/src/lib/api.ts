@@ -1,5 +1,7 @@
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
+    // Send the session cookie on every request (per-user auth, Story 10.2)
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   })
@@ -12,6 +14,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 async function apiFetchNoBody(path: string, options?: RequestInit): Promise<void> {
   const res = await fetch(`/api/v1${path}`, {
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   })

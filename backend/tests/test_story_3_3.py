@@ -3,8 +3,9 @@ from unittest.mock import patch, MagicMock
 from sqlmodel import SQLModel, Session, create_engine
 from sqlmodel.pool import StaticPool
 
+from sqlmodel import select
 from models.playlist import Playlist
-from models.config import Config
+from models.user import User
 import services.sync_engine as sync_engine
 
 
@@ -15,6 +16,9 @@ def session_fixture():
     )
     SQLModel.metadata.create_all(test_engine)
     with Session(test_engine) as session:
+        # Story 10.2: scheduled sync resolves the single logged-in user
+        session.add(User(spotify_user_id="scheduled", client_id="c", client_secret="s", token_json="{}"))
+        session.commit()
         yield session
 
 
@@ -92,14 +96,16 @@ def test_run_sync_no_playlists_raises(session):
     """AC6 — run_sync raises ValueError when no playlists are marked is_included=true."""
     with patch("services.sync_engine.engine", session.get_bind()):
         with pytest.raises(ValueError, match="No playlists selected"):
-            sync_engine.run_sync()
+            sync_engine.run_sync(1)
 
 
 def test_run_sync_returns_sliced_tracks(session):
     """AC1–AC4 — Happy path: harvest → dedup → sort → slice → push returns success dict."""
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Playlist(spotify_id="pl2", name="Chill", is_included=True))
-    session.add(Config(playlist_size=2, dynamic_playlist_id="dyn_id"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
+    session.add(Playlist(user_id=1, spotify_id="pl2", name="Chill", is_included=True))
+    user = session.exec(select(User)).first()
+    user.playlist_size = 2
+    session.add(user)
     session.commit()
 
     mock_sp = MagicMock()
@@ -115,7 +121,7 @@ def test_run_sync_returns_sliced_tracks(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks"),
     ):
-        result = sync_engine.run_sync()
+        result = sync_engine.run_sync(1)
 
     # playlist_size=2, all tracks are new (dynamic playlist was empty)
     assert result == {"status": "success", "track_count": 2, "new_track_count": 2}

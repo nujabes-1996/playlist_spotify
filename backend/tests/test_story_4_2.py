@@ -6,7 +6,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
-from models.config import Config
+from dependencies import get_current_user
+from models.user import User
 
 
 @pytest.fixture(name="session")
@@ -19,80 +20,62 @@ def session_fixture():
         yield session
 
 
+@pytest.fixture(name="user")
+def user_fixture(session: Session):
+    u = User(id=1, spotify_user_id="test_user", client_id="id", client_secret="secret")
+    session.add(u)
+    session.commit()
+    return u
+
+
 @pytest.fixture(name="client")
-def client_fixture(session: Session):
-    def get_session_override():
-        return session
-    app.dependency_overrides[get_session] = get_session_override
+def client_fixture(session: Session, user: User):
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: session.get(User, 1)
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
 
 
-def _seed_config(session, cron_expr=None):
-    config = Config(client_id="id", client_secret="secret", playlist_size=50, cron_expr=cron_expr)
-    session.add(config)
-    session.commit()
-    session.refresh(config)
-    return config
+# Story 10.3 removed PUT /config (credentials now flow through /auth/connect). The
+# scheduler re-bootstrap on PATCH /config is sourced from the current user's cron_expr.
 
 
-def test_put_config_with_cron_calls_bootstrap(client, session):
-    with patch("routers.config.bootstrap_scheduler") as mock_bs:
-        r = client.put("/api/v1/config", json={"client_id": "a", "client_secret": "b", "cron_expr": "0 */6 * * *"})
-    assert r.status_code == 200
-    mock_bs.assert_called_once_with("0 */6 * * *")
-
-
-def test_put_config_without_cron_calls_bootstrap_none(client, session):
-    with patch("routers.config.bootstrap_scheduler") as mock_bs:
-        r = client.put("/api/v1/config", json={"client_id": "a", "client_secret": "b"})
-    assert r.status_code == 200
-    mock_bs.assert_called_once_with(None)
-
-
-def test_patch_with_valid_cron_calls_bootstrap(client, session):
-    _seed_config(session)
-    with patch("routers.config.bootstrap_scheduler") as mock_bs:
+def test_patch_with_valid_cron_calls_bootstrap(client):
+    with patch("routers.config.bootstrap_user_job") as mock_bs:
         r = client.patch("/api/v1/config", json={"cron_expr": "0 0 * * *"})
     assert r.status_code == 200
-    mock_bs.assert_called_once_with("0 0 * * *")
+    mock_bs.assert_called_once_with(1, "0 0 * * *")
 
 
-def test_patch_clear_cron_calls_bootstrap_none(client, session):
-    _seed_config(session, cron_expr="0 * * * *")
-    with patch("routers.config.bootstrap_scheduler") as mock_bs:
+def test_patch_clear_cron_calls_bootstrap_none(client):
+    with patch("routers.config.bootstrap_user_job"):
+        client.patch("/api/v1/config", json={"cron_expr": "0 * * * *"})
+    with patch("routers.config.bootstrap_user_job") as mock_bs:
         r = client.patch("/api/v1/config", json={"cron_expr": None})
     assert r.status_code == 200
-    mock_bs.assert_called_once_with(None)
+    mock_bs.assert_called_once_with(1, None)
 
 
-def test_patch_without_cron_key_skips_bootstrap(client, session):
-    _seed_config(session, cron_expr="0 * * * *")
-    with patch("routers.config.bootstrap_scheduler") as mock_bs:
+def test_patch_without_cron_key_skips_bootstrap(client):
+    with patch("routers.config.bootstrap_user_job"):
+        client.patch("/api/v1/config", json={"cron_expr": "0 * * * *"})
+    with patch("routers.config.bootstrap_user_job") as mock_bs:
         r = client.patch("/api/v1/config", json={"playlist_size": 75})
     assert r.status_code == 200
     mock_bs.assert_not_called()
 
 
-def test_invalid_cron_put_returns_400(client, session):
-    with patch("routers.config.bootstrap_scheduler") as mock_bs:
-        r = client.put("/api/v1/config", json={"client_id": "a", "client_secret": "b", "cron_expr": "not-a-cron"})
-    assert r.status_code == 400
-    mock_bs.assert_not_called()
-
-
-def test_invalid_cron_patch_returns_400(client, session):
-    _seed_config(session)
-    with patch("routers.config.bootstrap_scheduler") as mock_bs:
+def test_invalid_cron_patch_returns_400(client):
+    with patch("routers.config.bootstrap_user_job") as mock_bs:
         r = client.patch("/api/v1/config", json={"cron_expr": "not-a-cron"})
     assert r.status_code == 400
     mock_bs.assert_not_called()
 
 
-def test_invalid_cron_does_not_corrupt_db(client, session):
-    _seed_config(session, cron_expr="0 * * * *")
-    with patch("routers.config.bootstrap_scheduler"):
+def test_invalid_cron_does_not_corrupt_db(client):
+    with patch("routers.config.bootstrap_user_job"):
+        client.patch("/api/v1/config", json={"cron_expr": "0 * * * *"})
         client.patch("/api/v1/config", json={"cron_expr": "not-a-cron"})
     r = client.get("/api/v1/config")
     assert r.json()["cron_expr"] == "0 * * * *"

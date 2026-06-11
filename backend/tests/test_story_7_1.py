@@ -6,6 +6,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
+from dependencies import get_current_user
+from models.user import User
 from models.playlist import Playlist
 
 
@@ -25,6 +27,7 @@ def client_fixture(session: Session):
         return session
 
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -62,7 +65,7 @@ def test_get_returns_is_hidden_false_with_image_and_count(client):
 
 
 def test_get_preserves_is_hidden_on_existing(client, session):
-    session.add(Playlist(spotify_id="abc", name="Old", is_included=False, is_hidden=True))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="Old", is_included=False, is_hidden=True))
     session.commit()
     with patch(
         "routers.playlists.spotify_service.get_user_playlists",
@@ -76,7 +79,7 @@ def test_get_preserves_is_hidden_on_existing(client, session):
 
 
 def test_patch_is_hidden_true_clears_is_included(client, session):
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=True, is_hidden=False))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=True, is_hidden=False))
     session.commit()
     r = client.patch("/api/v1/playlists/abc", json={"is_hidden": True})
     assert r.status_code == 200
@@ -90,7 +93,7 @@ def test_patch_is_hidden_true_clears_is_included(client, session):
 
 
 def test_patch_is_hidden_false_does_not_flip_is_included(client, session):
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=False, is_hidden=True))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=False, is_hidden=True))
     session.commit()
     r = client.patch("/api/v1/playlists/abc", json={"is_hidden": False})
     assert r.status_code == 200
@@ -100,7 +103,7 @@ def test_patch_is_hidden_false_does_not_flip_is_included(client, session):
 
 
 def test_patch_empty_body_is_noop(client, session):
-    session.add(Playlist(spotify_id="abc", name="My Mix", is_included=True, is_hidden=False))
+    session.add(Playlist(user_id=1, spotify_id="abc", name="My Mix", is_included=True, is_hidden=False))
     session.commit()
     r = client.patch("/api/v1/playlists/abc", json={})
     assert r.status_code == 200
@@ -110,8 +113,8 @@ def test_patch_empty_body_is_noop(client, session):
 
 
 def test_sync_engine_query_excludes_hidden(session):
-    session.add(Playlist(spotify_id="visible", name="Visible", is_included=True, is_hidden=False))
-    session.add(Playlist(spotify_id="hidden", name="Hidden", is_included=True, is_hidden=True))
+    session.add(Playlist(user_id=1, spotify_id="visible", name="Visible", is_included=True, is_hidden=False))
+    session.add(Playlist(user_id=1, spotify_id="hidden", name="Hidden", is_included=True, is_hidden=True))
     session.commit()
     rows = session.exec(
         select(Playlist).where(Playlist.is_included == True, Playlist.is_hidden == False)  # noqa: E712

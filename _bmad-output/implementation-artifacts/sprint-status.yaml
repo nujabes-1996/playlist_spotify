@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-06
-last_updated: 2026-05-26  # Story 9.8 dev-story complete
+last_updated: 2026-06-11  # Story 10-5 → review (dev-story complete)
 project: playlist_spotify
 
 project_key: NOKEY
@@ -119,3 +119,14 @@ development_status:
   9-7-blacklist-ux-gray-out-hidden-only-filter: review  # dev-story complete 2026-05-26
   9-8-paginated-tracks-infinite-scroll: review  # dev-story complete 2026-05-26
   epic-9-retrospective: optional
+
+  # Epic 10: Accounts, Sessions & Multi-Tenancy
+  # Added 2026-06-09 via Correct Course — see planning-artifacts/sprint-change-proposal-2026-06-09-multi-user-oauth.md
+  # MAJOR change: requires PRD + Architecture amendments before story creation.
+  epic-10: in-progress
+  10-1-user-model-sessions-auth-gate: review
+  10-2-per-user-login-logout: review
+  10-3-data-scoping-migration: review  # dev-story complete 2026-06-10
+  10-4-per-user-scheduler-jobs: review  # dev-story complete 2026-06-10
+  10-5-prod-hardening-session-cookie: review  # dev-story complete 2026-06-11
+  epic-10-retrospective: optional

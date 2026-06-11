@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel, Session, create_engine
 from sqlmodel.pool import StaticPool
@@ -7,7 +7,12 @@ from spotipy import SpotifyException
 
 from main import app
 from database import get_session
-from models.config import Config
+from dependencies import get_current_user
+from models.user import User
+
+# Service-level tests pass an explicit user; the blacklist lookup is patched to set()
+# so these unit tests never touch the real on-disk DB.
+_USER = User(id=1, spotify_user_id="svc_user")
 
 
 @pytest.fixture(name="engine")
@@ -31,6 +36,7 @@ def client_fixture(session: Session):
         return session
 
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -139,7 +145,7 @@ def test_liked_songs_sentinel_routes_to_service(client):
     ) as svc_mock:
         r = client.get("/api/v1/playlists/liked_songs/tracks")
     assert r.status_code == 200
-    svc_mock.assert_called_once_with("liked_songs", 50, 0)
+    svc_mock.assert_called_once_with("liked_songs", 50, 0, ANY)
 
 
 # --- Service-level unit tests ---
@@ -160,8 +166,10 @@ def test_service_paginates_and_concatenates_for_regular_playlist():
     }
     mock_sp.playlist_items.side_effect = [page1, page2]
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
-        result = svc.get_playlist_tracks_full("pl-1")
+    with patch.object(svc, "get_authenticated_client", return_value=mock_sp), patch.object(
+        svc.blacklist_service, "get_blacklisted_ids", return_value=set()
+    ):
+        result = svc.get_playlist_tracks_full("pl-1", _USER)
 
     assert len(result) == 150
     assert [t["spotify_id"] for t in result] == [f"t{i}" for i in range(150)]
@@ -184,8 +192,10 @@ def test_service_skips_null_and_local_tracks():
         "next": None,
     }
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
-        result = svc.get_playlist_tracks_full("pl-1")
+    with patch.object(svc, "get_authenticated_client", return_value=mock_sp), patch.object(
+        svc.blacklist_service, "get_blacklisted_ids", return_value=set()
+    ):
+        result = svc.get_playlist_tracks_full("pl-1", _USER)
 
     assert len(result) == 1
     assert result[0]["spotify_id"] == "valid-1"
@@ -201,8 +211,10 @@ def test_service_sets_image_url_null_when_no_album_images():
         "next": None,
     }
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
-        result = svc.get_playlist_tracks_full("pl-1")
+    with patch.object(svc, "get_authenticated_client", return_value=mock_sp), patch.object(
+        svc.blacklist_service, "get_blacklisted_ids", return_value=set()
+    ):
+        result = svc.get_playlist_tracks_full("pl-1", _USER)
 
     assert len(result) == 1
     assert result[0]["image_url"] is None
@@ -220,8 +232,10 @@ def test_service_flattens_artists_to_names():
         "next": None,
     }
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
-        result = svc.get_playlist_tracks_full("pl-1")
+    with patch.object(svc, "get_authenticated_client", return_value=mock_sp), patch.object(
+        svc.blacklist_service, "get_blacklisted_ids", return_value=set()
+    ):
+        result = svc.get_playlist_tracks_full("pl-1", _USER)
 
     assert result[0]["artists"] == ["A", "B"]
 
@@ -249,8 +263,10 @@ def test_service_liked_songs_uses_saved_tracks_api():
         "next": None,
     }
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
-        result = svc.get_playlist_tracks_full("liked_songs")
+    with patch.object(svc, "get_authenticated_client", return_value=mock_sp), patch.object(
+        svc.blacklist_service, "get_blacklisted_ids", return_value=set()
+    ):
+        result = svc.get_playlist_tracks_full("liked_songs", _USER)
 
     assert len(result) == 1
     assert result[0]["spotify_id"] == "t1"
@@ -268,9 +284,11 @@ def test_service_raises_spotify_exception_on_404_probe():
         http_status=404, code=-1, msg="not found"
     )
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
+    with patch.object(svc, "get_authenticated_client", return_value=mock_sp), patch.object(
+        svc.blacklist_service, "get_blacklisted_ids", return_value=set()
+    ):
         with pytest.raises(SpotifyException) as exc_info:
-            svc.get_playlist_tracks_full("ghost")
+            svc.get_playlist_tracks_full("ghost", _USER)
     assert exc_info.value.http_status == 404
     mock_sp.playlist_items.assert_not_called()
 
@@ -283,7 +301,9 @@ def test_service_reraises_non_404_spotify_exception():
         http_status=500, code=-1, msg="boom"
     )
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
+    with patch.object(svc, "get_authenticated_client", return_value=mock_sp), patch.object(
+        svc.blacklist_service, "get_blacklisted_ids", return_value=set()
+    ):
         with pytest.raises(SpotifyException) as exc_info:
-            svc.get_playlist_tracks_full("pl-1")
+            svc.get_playlist_tracks_full("pl-1", _USER)
     assert exc_info.value.http_status == 500

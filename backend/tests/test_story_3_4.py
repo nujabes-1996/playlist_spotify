@@ -3,9 +3,9 @@ from unittest.mock import patch, MagicMock
 from sqlmodel import SQLModel, Session, create_engine, select
 from sqlmodel.pool import StaticPool
 
-from models.config import Config
 from models.playlist import Playlist
 from models.sync_log import SyncLog
+from models.user import User
 import services.sync_engine as sync_engine
 import services.spotify as spotify_service_module
 
@@ -17,6 +17,9 @@ def session_fixture():
     )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
+        # Story 10.2: scheduled sync resolves the single logged-in user
+        session.add(User(spotify_user_id="scheduled", client_id="c", client_secret="s", token_json="{}"))
+        session.commit()
         yield session
 
 
@@ -25,21 +28,25 @@ def session_fixture():
 # ────────────────────────────────────────────────────────────
 
 def test_get_or_create_uses_stored_id(session):
-    session.add(Config(playlist_size=50, dynamic_playlist_id="existing_id"))
+    user = session.exec(select(User)).first()
+    user.target_playlist_id = "existing_id"
+    session.add(user)
     session.commit()
 
     mock_sp = MagicMock()
     mock_sp.playlist.return_value = {"id": "existing_id"}
 
     with patch("services.spotify.engine", session.get_bind()):
-        result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp)
+        result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp, user)
 
     assert result == "existing_id"
     mock_sp.user_playlist_create.assert_not_called()
 
 
 def test_get_or_create_creates_when_no_stored_id(session):
-    session.add(Config(playlist_size=50, dynamic_playlist_id=None))
+    user = session.exec(select(User)).first()
+    user.target_playlist_id = None
+    session.add(user)
     session.commit()
 
     mock_sp = MagicMock()
@@ -48,16 +55,19 @@ def test_get_or_create_creates_when_no_stored_id(session):
     mock_sp.current_user_playlist_create.return_value = {"id": "new_playlist_id"}
 
     with patch("services.spotify.engine", session.get_bind()):
-        result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp)
+        result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp, user)
 
     assert result == "new_playlist_id"
     mock_sp.current_user_playlist_create.assert_called_once()
-    config = session.exec(select(Config)).first()
-    assert config.dynamic_playlist_id == "new_playlist_id"
+    session.expire_all()
+    refreshed = session.exec(select(User)).first()
+    assert refreshed.target_playlist_id == "new_playlist_id"
 
 
 def test_get_or_create_recreates_on_invalid_stored_id(session):
-    session.add(Config(playlist_size=50, dynamic_playlist_id="stale_id"))
+    user = session.exec(select(User)).first()
+    user.target_playlist_id = "stale_id"
+    session.add(user)
     session.commit()
 
     mock_sp = MagicMock()
@@ -67,7 +77,7 @@ def test_get_or_create_recreates_on_invalid_stored_id(session):
     mock_sp.current_user_playlist_create.return_value = {"id": "new_id"}
 
     with patch("services.spotify.engine", session.get_bind()):
-        result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp)
+        result = spotify_service_module.get_or_create_dynamic_playlist(mock_sp, user)
 
     assert result == "new_id"
     mock_sp.current_user_playlist_create.assert_called_once()
@@ -104,8 +114,10 @@ PLAYLIST_A = [
 
 
 def test_run_sync_success_writes_log(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=2, dynamic_playlist_id="dyn_id"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
+    user = session.exec(select(User)).first()
+    user.playlist_size = 2
+    session.add(user)
     session.commit()
 
     mock_sp = MagicMock()
@@ -116,7 +128,7 @@ def test_run_sync_success_writes_log(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks"),
     ):
-        sync_engine.run_sync()
+        sync_engine.run_sync(1)
 
     logs = session.exec(select(SyncLog)).all()
     assert len(logs) == 1
@@ -127,8 +139,7 @@ def test_run_sync_success_writes_log(session):
 
 
 def test_run_sync_success_returns_dict(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=50, dynamic_playlist_id="dyn_id"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
     session.commit()
 
     mock_sp = MagicMock()
@@ -139,7 +150,7 @@ def test_run_sync_success_returns_dict(session):
         patch("services.sync_engine.spotify_service.get_or_create_dynamic_playlist", return_value="dyn_id"),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks"),
     ):
-        result = sync_engine.run_sync()
+        result = sync_engine.run_sync(1)
 
     assert result["status"] == "success"
     assert result["track_count"] == 2
@@ -147,15 +158,12 @@ def test_run_sync_success_returns_dict(session):
 
 
 def test_run_sync_no_playlists_writes_failure_log(session):
-    session.add(Config(playlist_size=50))
-    session.commit()
-
     with (
         patch("services.sync_engine.engine", session.get_bind()),
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
         with pytest.raises(ValueError, match="No playlists selected"):
-            sync_engine.run_sync()
+            sync_engine.run_sync(1)
         mock_replace.assert_not_called()
 
     logs = session.exec(select(SyncLog)).all()
@@ -165,8 +173,7 @@ def test_run_sync_no_playlists_writes_failure_log(session):
 
 
 def test_run_sync_spotify_error_writes_failure_log(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=50, dynamic_playlist_id="dyn_id"))
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
     session.commit()
 
     mock_sp = MagicMock()
@@ -178,7 +185,7 @@ def test_run_sync_spotify_error_writes_failure_log(session):
         patch("services.sync_engine.spotify_service.replace_playlist_tracks", side_effect=Exception("Spotify 500")),
     ):
         with pytest.raises(Exception, match="Spotify 500"):
-            sync_engine.run_sync()
+            sync_engine.run_sync(1)
 
     logs = session.exec(select(SyncLog)).all()
     assert len(logs) == 1
@@ -187,8 +194,10 @@ def test_run_sync_spotify_error_writes_failure_log(session):
 
 
 def test_run_sync_preserves_playlist_on_harvest_error(session):
-    session.add(Playlist(spotify_id="pl1", name="Mix", is_included=True))
-    session.add(Config(playlist_size=50, dynamic_playlist_id="dyn_id"))
+    user = session.exec(select(User)).first()
+    user.target_playlist_id = "dyn_id"
+    session.add(user)
+    session.add(Playlist(user_id=1, spotify_id="pl1", name="Mix", is_included=True))
     session.commit()
 
     mock_sp = MagicMock()
@@ -199,6 +208,6 @@ def test_run_sync_preserves_playlist_on_harvest_error(session):
         patch("services.sync_engine.spotify_service.replace_playlist_tracks") as mock_replace,
     ):
         with pytest.raises(Exception):
-            sync_engine.run_sync()
+            sync_engine.run_sync(1)
 
     mock_replace.assert_not_called()  # Playlist untouched (NFR10)

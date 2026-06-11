@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from spotipy import SpotifyException
 from sqlmodel import select
 
-from dependencies import SessionDep
+from dependencies import CurrentUserDep, SessionDep
 from models.playlist import Playlist
 from services import spotify as spotify_service
 
@@ -40,9 +40,9 @@ class PlaylistTrack(BaseModel):
 
 
 @router.get("/playlists", response_model=list[PlaylistRead])
-def get_playlists(session: SessionDep) -> list[PlaylistRead]:
+def get_playlists(session: SessionDep, current_user: CurrentUserDep) -> list[PlaylistRead]:
     try:
-        spotify_playlists = spotify_service.get_user_playlists()
+        spotify_playlists = spotify_service.get_user_playlists(current_user)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
 
@@ -52,25 +52,38 @@ def get_playlists(session: SessionDep) -> list[PlaylistRead]:
         for p in spotify_playlists
     }
 
-    # Upsert: add new rows, update name of existing
+    # Upsert: add new rows, update name of existing (scoped to current user)
     for p in spotify_playlists:
         existing = session.exec(
-            select(Playlist).where(Playlist.spotify_id == p["spotify_id"])
+            select(Playlist).where(
+                Playlist.user_id == current_user.id,
+                Playlist.spotify_id == p["spotify_id"],
+            )
         ).first()
         if existing:
             existing.name = p["name"]
         else:
-            session.add(Playlist(spotify_id=p["spotify_id"], name=p["name"]))
+            session.add(
+                Playlist(
+                    user_id=current_user.id,
+                    spotify_id=p["spotify_id"],
+                    name=p["name"],
+                )
+            )
 
-    # Remove playlists no longer returned by Spotify
-    db_playlists = session.exec(select(Playlist)).all()
+    # Remove this user's playlists no longer returned by Spotify
+    db_playlists = session.exec(
+        select(Playlist).where(Playlist.user_id == current_user.id)
+    ).all()
     for db_p in db_playlists:
         if db_p.spotify_id not in spotify_ids:
             session.delete(db_p)
 
     session.commit()
 
-    rows = session.exec(select(Playlist)).all()
+    rows = session.exec(
+        select(Playlist).where(Playlist.user_id == current_user.id)
+    ).all()
     result = []
     for r in rows:
         image_url, track_count = meta_map.get(r.spotify_id, (None, None))
@@ -96,11 +109,12 @@ class PlaylistTracksPage(BaseModel):
 @router.get("/playlists/{spotify_id}/tracks", response_model=PlaylistTracksPage)
 def get_playlist_tracks(
     spotify_id: str,
+    current_user: CurrentUserDep,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> PlaylistTracksPage:
     try:
-        page = spotify_service.get_playlist_tracks_page(spotify_id, limit, offset)
+        page = spotify_service.get_playlist_tracks_page(spotify_id, limit, offset, current_user)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
     except SpotifyException as exc:
@@ -112,10 +126,16 @@ def get_playlist_tracks(
 
 @router.patch("/playlists/{spotify_id}", response_model=PlaylistRead)
 def toggle_playlist(
-    spotify_id: str, payload: PlaylistPatch, session: SessionDep
+    spotify_id: str,
+    payload: PlaylistPatch,
+    session: SessionDep,
+    current_user: CurrentUserDep,
 ) -> PlaylistRead:
     playlist = session.exec(
-        select(Playlist).where(Playlist.spotify_id == spotify_id)
+        select(Playlist).where(
+            Playlist.user_id == current_user.id,
+            Playlist.spotify_id == spotify_id,
+        )
     ).first()
     if playlist is None:
         raise HTTPException(status_code=404, detail="Playlist not found")

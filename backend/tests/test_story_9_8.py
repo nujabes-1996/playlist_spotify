@@ -6,6 +6,8 @@ from sqlmodel.pool import StaticPool
 
 from main import app
 from database import get_session
+from dependencies import get_current_user
+from models.user import User
 
 
 @pytest.fixture(name="engine")
@@ -29,6 +31,7 @@ def client_fixture(session: Session):
         return session
 
     app.dependency_overrides[get_session] = get_session_override
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, spotify_user_id="test_user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
@@ -163,7 +166,7 @@ def test_negative_offset_returns_422(client):
     assert r.status_code == 422
 
 
-def test_liked_songs_branch_uses_saved_tracks(client):
+def test_liked_songs_branch_uses_saved_tracks(client, engine):
     from services import spotify as svc
 
     mock_sp = MagicMock()
@@ -172,7 +175,10 @@ def test_liked_songs_branch_uses_saved_tracks(client):
         "total": 535,
     }
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
+    with (
+        patch.object(svc, "engine", engine),
+        patch.object(svc, "get_authenticated_client", return_value=mock_sp),
+    ):
         r = client.get("/api/v1/playlists/liked_songs/tracks?limit=50&offset=0")
 
     assert r.status_code == 200
@@ -187,9 +193,10 @@ def test_liked_songs_branch_uses_saved_tracks(client):
 # --- Service-level tests ---
 
 
-def test_service_skipped_items_advance_offset_by_raw_page_len():
+def test_service_skipped_items_advance_offset_by_raw_page_len(engine):
     from services import spotify as svc
 
+    user = User(id=1, spotify_user_id="test_user")
     mock_sp = MagicMock()
     mock_sp.playlist.return_value = {"tracks": {"total": 100}}
     raw_items = [
@@ -204,8 +211,11 @@ def test_service_skipped_items_advance_offset_by_raw_page_len():
         "total": 100,
     }
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
-        result = svc.get_playlist_tracks_page("pl-1", limit=5, offset=0)
+    with (
+        patch.object(svc, "engine", engine),
+        patch.object(svc, "get_authenticated_client", return_value=mock_sp),
+    ):
+        result = svc.get_playlist_tracks_page("pl-1", limit=5, offset=0, user=user)
 
     # Kept items: only "valid-1" and "valid-2" (3rd item t-local has is_local=True
     # at the item AND track level — second case path: skip via outer is_local).
@@ -218,17 +228,21 @@ def test_service_skipped_items_advance_offset_by_raw_page_len():
     assert result["total"] == 100
 
 
-def test_service_liked_songs_next_offset_null_at_end():
+def test_service_liked_songs_next_offset_null_at_end(engine):
     from services import spotify as svc
 
+    user = User(id=1, spotify_user_id="test_user")
     mock_sp = MagicMock()
     mock_sp.current_user_saved_tracks.return_value = {
         "items": [_make_item(f"t{i}") for i in range(35)],
         "total": 185,
     }
 
-    with patch.object(svc, "get_authenticated_client", return_value=mock_sp):
-        result = svc.get_playlist_tracks_page("liked_songs", limit=50, offset=150)
+    with (
+        patch.object(svc, "engine", engine),
+        patch.object(svc, "get_authenticated_client", return_value=mock_sp),
+    ):
+        result = svc.get_playlist_tracks_page("liked_songs", limit=50, offset=150, user=user)
 
     assert len(result["items"]) == 35
     # offset 150 + raw 35 = 185 = total → next_offset is None

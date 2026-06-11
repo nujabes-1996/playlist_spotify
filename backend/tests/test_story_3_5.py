@@ -3,12 +3,18 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from main import app
+from dependencies import get_current_user
+from models.user import User
 
 
 @pytest.fixture(name="client")
 def client_fixture():
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=1, spotify_user_id="test_user"
+    )
     with TestClient(app) as client:
         yield client
+    app.dependency_overrides.clear()
 
 
 def test_sync_run_success(client):
